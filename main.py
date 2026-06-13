@@ -6,7 +6,7 @@
 ║  ⚠  ONLY use on targets you OWN or have written permission for  ║
 ╚══════════════════════════════════════════════════════════════════╝
 
-Author  : [Your Name]
+Author  : cyber pankaj
 Purpose : Portfolio project demonstrating ethical hacking skills
 Legal   : Unauthorized scanning = IT Act 2000, Section 66 violation
 """
