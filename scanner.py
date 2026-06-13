@@ -3,12 +3,8 @@
 ╔══════════════════════════════════════════════════════════════════╗
 ║          ADVANCED WEB VULNERABILITY SCANNER v2.0                 ║
 ║          IIT Kanpur B.Cyber Portfolio Project                    ║
-║  ⚠  ONLY use on targets you OWN or have written permission for  ║
+║  ⚠  ONLY use on targets you OWN or have written permission for   ║
 ╚══════════════════════════════════════════════════════════════════╝
-
-Author  : cyber pankaj
-Purpose : Portfolio project demonstrating ethical hacking skills
-Legal   : Unauthorized scanning = IT Act 2000, Section 66 violation
 """
 
 import requests
@@ -53,7 +49,9 @@ init(autoreset=True)
 # ══════════════════════════════════════════════════════════════════════════════
 #  CONFIGURATION
 # ══════════════════════════════════════════════════════════════════════════════
-GEMINI_API_KEY  = "AIzaSyBoeGzFL_bcwC6Llezpk-EZb66JHOuMMnA"   # ← Replace with your key
+# अपनी Gemini API Key यहाँ डालें
+GEMINI_API_KEY  = "AIzaSyBoeGzFL_bcwC6Llezpk-EZb66JHOuMMnA"   
+
 REQUEST_TIMEOUT = 8
 MAX_THREADS     = 15
 SCAN_DELAY      = 0.25   # seconds between requests (be polite)
@@ -69,33 +67,24 @@ RESET = Style.RESET_ALL
 # ══════════════════════════════════════════════════════════════════════════════
 
 SQL_PAYLOADS = [
-    # Classic
     "'", '"', "\\", "''", "` ",
     "' OR '1'='1", "' OR '1'='1'--", "' OR 1=1--",
     "' OR 1=1#", "\" OR 1=1--", "\" OR \"1\"=\"1",
-    # Order By (column enumeration)
     "1' ORDER BY 1--+", "1' ORDER BY 2--+", "1' ORDER BY 3--+",
-    # Union Based
     "' UNION SELECT NULL--", "' UNION SELECT NULL,NULL--",
     "' UNION SELECT NULL,NULL,NULL--",
     "' UNION SELECT 1,2,3--",
-    # Boolean Based
     "1 AND 1=1", "1 AND 1=2",
     "' AND '1'='1", "' AND '1'='2",
-    # Time Based Blind
-    "' AND SLEEP(3)--",                           # MySQL
-    "1; WAITFOR DELAY '0:0:3'--",                  # MSSQL
-    "'; SELECT pg_sleep(3)--",                     # PostgreSQL
-    "' AND (SELECT * FROM (SELECT(SLEEP(3)))a)--", # MySQL nested
-    # Error Based
+    "' AND SLEEP(3)--",                           
+    "1; WAITFOR DELAY '0:0:3'--",                  
+    "'; SELECT pg_sleep(3)--",                     
+    "' AND (SELECT * FROM (SELECT(SLEEP(3)))a)--", 
     "' AND EXTRACTVALUE(1,CONCAT(0x7e,VERSION()))--",
     "' AND (SELECT 1 FROM(SELECT COUNT(*),CONCAT(VERSION(),0x3a,FLOOR(RAND(0)*2))x FROM information_schema.tables GROUP BY x)a)--",
-    # Auth Bypass
     "admin'--", "admin'#", "' OR 'x'='x",
     "') OR ('1'='1", "admin' OR 1=1--",
-    # Encoded
     "%27", "1%27 OR 1=1", "%27 OR %271%27=%271",
-    # Special
     "' GROUP BY 1--", "' HAVING 1=1--",
     "'; INSERT INTO users VALUES('hacked','hacked')--",
 ]
@@ -123,14 +112,11 @@ SQL_ERRORS = [
 ]
 
 XSS_PAYLOADS = [
-    # Basic
     '<script>alert("XSS")</script>',
     '<script>alert(1)</script>',
-    # Attribute injection
     '"><script>alert(1)</script>',
     "'><script>alert(1)</script>",
     '"><script>alert(document.cookie)</script>',
-    # Event handlers
     '<img src=x onerror=alert(1)>',
     '<img src="x" onerror="alert(1)">',
     '<svg onload=alert(1)>',
@@ -142,61 +128,41 @@ XSS_PAYLOADS = [
     '<input autofocus onfocus=alert(1)>',
     '"><input autofocus onfocus=alert(1)>',
     '<marquee onstart=alert(1)>',
-    # iframe / JS URI
     '<iframe src="javascript:alert(1)">',
     'javascript:alert(1)',
-    # Template/SSTI detection
     '{{7*7}}', '${7*7}', '#{7*7}', '<%= 7*7 %>',
-    # Filter bypass attempts
     '<scr<script>ipt>alert(1)</scr</script>ipt>',
     '<ScRiPt>alert(1)</ScRiPt>',
     '&#60;script&#62;alert(1)&#60;/script&#62;',
 ]
 
 SENSITIVE_FILES = [
-    # Environment / Secrets
     "/.env", "/.env.local", "/.env.backup", "/.env.prod", "/.env.dev",
     "/.env.example", "/.env.staging",
-    # Version control
     "/.git/config", "/.git/HEAD", "/.git/COMMIT_EDITMSG",
     "/.git/FETCH_HEAD", "/.svn/entries",
-    # PHP config
     "/config.php", "/wp-config.php", "/configuration.php",
     "/config.inc.php", "/settings.php", "/local.php",
-    # YAML/JSON config
     "/config.yml", "/config.yaml", "/config.json",
     "/database.yml", "/database.php", "/db.php",
     "/secrets.yml", "/credentials.yml", "/application.yml",
-    # Web server
     "/.htaccess", "/.htpasswd", "/web.config", "/.user.ini",
-    # PHP info (critical!)
     "/phpinfo.php", "/info.php", "/test.php", "/php.php",
-    # Database dumps (critical!)
     "/backup.sql", "/dump.sql", "/db.sql", "/database.sql",
     "/data.sql", "/backup.db", "/site.db",
-    # Archive files
     "/backup.zip", "/backup.tar.gz", "/www.zip", "/site.zip",
     "/htdocs.zip", "/public_html.zip",
-    # Standard files
     "/robots.txt", "/sitemap.xml",
     "/crossdomain.xml", "/clientaccesspolicy.xml",
-    # CMS specific
     "/xmlrpc.php", "/wp-login.php", "/wp-cron.php",
     "/joomla.xml", "/configuration.php.bak",
-    # Package managers (source code leaks)
     "/composer.json", "/composer.lock",
     "/package.json", "/yarn.lock", "/package-lock.json",
-    # IDE / OS files
     "/.DS_Store", "/Thumbs.db", "/.idea/workspace.xml",
-    # Documentation
     "/readme.md", "/README.md", "/INSTALL.md", "/CHANGELOG.md",
-    # Server status (Apache)
     "/server-status", "/server-info",
-    # Shell history
     "/.bash_history", "/.viminfo",
-    # API endpoints that may leak data
     "/api/v1/users", "/api/users", "/api/config", "/api/debug",
-    # API docs (may expose all endpoints)
     "/swagger.json", "/swagger.yaml", "/openapi.json",
     "/api-docs", "/api-docs/swagger.json",
     "/graphql", "/graphiql", "/__debug__",
@@ -223,21 +189,18 @@ ADMIN_PATHS = [
 ]
 
 LFI_PAYLOADS = [
-    # Linux
     "../../../../etc/passwd",
     "../../../etc/passwd",
     "../../etc/passwd",
-    "../../../../etc/passwd%00",   # Null byte bypass
+    "../../../../etc/passwd%00",   
     "....//....//....//etc/passwd",
     "%2e%2e%2f%2e%2e%2f%2e%2e%2fetc%2fpasswd",
     "..%2F..%2F..%2Fetc%2Fpasswd",
-    "..%252F..%252F..%252Fetc%252Fpasswd",  # Double encoding
+    "..%252F..%252F..%252Fetc%252Fpasswd",  
     "/etc/passwd",
-    # Windows
     "../../../../windows/win.ini",
     "../../../../windows/system32/drivers/etc/hosts",
     "..\\..\\..\\..\\windows\\win.ini",
-    # PHP wrappers
     "php://filter/convert.base64-encode/resource=index.php",
     "php://filter/read=string.rot13/resource=index.php",
     "php://input",
@@ -246,10 +209,10 @@ LFI_PAYLOADS = [
 ]
 
 LFI_INDICATORS = [
-    "root:x:", "bin:x:", "daemon:x:",   # /etc/passwd content
-    "[extensions]", "[fonts]",           # windows/win.ini
-    "localhost\t127",                    # /etc/hosts
-    "PD9waHAg",                          # base64 PHP tag
+    "root:x:", "bin:x:", "daemon:x:",   
+    "[extensions]", "[fonts]",           
+    "localhost\t127",                    
+    "PD9waHAg",                          
 ]
 
 CMD_INJECTION_PAYLOADS = [
@@ -260,19 +223,18 @@ CMD_INJECTION_PAYLOADS = [
     "; ping -c 2 127.0.0.1", "& ping -c 2 127.0.0.1",
     "; sleep 3", "| sleep 3", "` sleep 3`",
     "$(sleep 3)",
-    # Windows
     "& dir", "| dir",
     "& type C:\\windows\\win.ini",
     "& ping 127.0.0.1 -n 2",
 ]
 
 CMD_INDICATORS = [
-    "uid=", "gid=", "groups=",        # id output
-    "root:", "daemon:",                # passwd
-    "total ", "drwxr", "drwx",        # ls output
-    "PING", "bytes from",             # ping
-    "[fonts]", "[extensions]",        # win.ini
-    "Volume in drive",                # dir output
+    "uid=", "gid=", "groups=",        
+    "root:", "daemon:",                
+    "total ", "drwxr", "drwx",        
+    "PING", "bytes from",             
+    "[fonts]", "[extensions]",        
+    "Volume in drive",                
 ]
 
 OPEN_REDIRECT_PARAMS = [
@@ -363,7 +325,6 @@ def section(title):
 
 def req(url, method="GET", params=None, data=None,
         headers=None, allow_redirects=True):
-    """Wrapper around requests with default browser headers."""
     h = {
         "User-Agent": (
             "Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
@@ -393,20 +354,10 @@ def req(url, method="GET", params=None, data=None,
 
 
 # ══════════════════════════════════════════════════════════════════════════════
-#  MODULE 1 — RECONNAISSANCE
+#  MODULES
 # ══════════════════════════════════════════════════════════════════════════════
 
 class ReconModule:
-    """
-    Passive + active information gathering:
-      - IP resolution
-      - DNS records  (A, MX, NS, TXT, CNAME)
-      - WHOIS data
-      - Technology fingerprinting
-      - Cookie flag analysis
-      - robots.txt discovery
-    """
-
     def __init__(self, target_url):
         self.url    = target_url
         self.parsed = urlparse(target_url)
@@ -422,7 +373,6 @@ class ReconModule:
         self._check_robots()
         return self.results
 
-    # ── IP Resolution ──────────────────────────────────────────────────────
     def _resolve_ip(self):
         try:
             ip = socket.gethostbyname(self.host)
@@ -432,7 +382,6 @@ class ReconModule:
             self.results["ip"] = "Unresolved"
             log("Could not resolve hostname to IP", "WARN")
 
-    # ── DNS Records ────────────────────────────────────────────────────────
     def _dns_records(self):
         if not DNS_AVAILABLE:
             log("dnspython not installed — skipping DNS records", "SKIP")
@@ -448,7 +397,6 @@ class ReconModule:
                 pass
         self.results["dns"] = dns_data
 
-    # ── WHOIS ──────────────────────────────────────────────────────────────
     def _whois(self):
         if not WHOIS_AVAILABLE:
             log("python-whois not installed — skipping WHOIS", "SKIP")
@@ -473,7 +421,6 @@ class ReconModule:
         except Exception as e:
             log(f"WHOIS failed : {e}", "WARN")
 
-    # ── Technology Fingerprinting ──────────────────────────────────────────
     def _fingerprint(self):
         resp = req(self.url)
         if not resp:
@@ -482,7 +429,6 @@ class ReconModule:
         tech     = []
         issues   = []
 
-        # Server / X-Powered-By (information disclosure!)
         server = headers.get("Server", "")
         if server:
             tech.append(f"Server: {server}")
@@ -494,7 +440,6 @@ class ReconModule:
             log(f"X-Powered-By : {R}{powered}{RESET}  ← version disclosed!", "VULN")
             issues.append(f"X-Powered-By header discloses: {powered}")
 
-        # CMS detection
         body = resp.text.lower()
         cms_signatures = {
             "WordPress":  ["wp-content", "wp-includes", "wordpress"],
@@ -513,13 +458,11 @@ class ReconModule:
                 tech.append(f"CMS/Framework: {cms}")
                 log(f"CMS/Framework: {Y}{cms} detected{RESET}", "WARN")
 
-        # Cookie security analysis
         cookie_issues = []
         for cookie in resp.cookies:
             flags = []
             if not cookie.secure:
                 flags.append("Missing 'Secure' flag (sent over HTTP!)")
-            # Check HttpOnly from raw Set-Cookie header
             raw_cookies = headers.get("Set-Cookie", "")
             if "httponly" not in raw_cookies.lower() and cookie.name in raw_cookies:
                 flags.append("Missing 'HttpOnly' flag (JS can steal this!)")
@@ -534,7 +477,6 @@ class ReconModule:
         self.results["info_disclosure"] = issues
         self.results["cookie_issues"]   = cookie_issues
 
-    # ── robots.txt ─────────────────────────────────────────────────────────
     def _check_robots(self):
         robots_url = urljoin(self.url, "/robots.txt")
         resp = req(robots_url)
@@ -549,16 +491,7 @@ class ReconModule:
             log("robots.txt   : Not found", "INFO")
 
 
-# ══════════════════════════════════════════════════════════════════════════════
-#  MODULE 2 — SECURITY HEADERS
-# ══════════════════════════════════════════════════════════════════════════════
-
 class SecurityHeadersModule:
-    """
-    Checks for presence and quality of all critical security headers.
-    Also flags headers that leak server/version information.
-    """
-
     def __init__(self, target_url):
         self.url     = target_url
         self.results = {"missing": [], "present": [], "misconfigured": []}
@@ -593,7 +526,6 @@ class SecurityHeadersModule:
                     "fix":    f"{header}: {info['recommended']}",
                 })
 
-        # Leak headers
         for h in ["Server", "X-Powered-By", "X-AspNet-Version",
                    "X-AspNetMvc-Version", "X-Generator", "X-Drupal-Cache"]:
             if h.lower() in headers:
@@ -630,19 +562,7 @@ class SecurityHeadersModule:
             })
 
 
-# ══════════════════════════════════════════════════════════════════════════════
-#  MODULE 3 — SSL/TLS ANALYSIS
-# ══════════════════════════════════════════════════════════════════════════════
-
 class SSLModule:
-    """
-    Checks:
-      - HTTPS usage
-      - Certificate validity / expiry / CN
-      - HTTP → HTTPS redirect
-      - Mixed content indicators
-    """
-
     def __init__(self, target_url):
         self.url    = target_url
         self.parsed = urlparse(target_url)
@@ -671,12 +591,10 @@ class SSLModule:
                 cert    = s.getpeercert()
                 version = s.version()
 
-            # TLS Version
             log(f"TLS Version  : {G}{version}{RESET}", "OK")
             if version in ("TLSv1", "TLSv1.1"):
                 log(f"{R}Weak TLS version {version}!{RESET} Upgrade to TLS 1.2+", "VULN")
 
-            # Certificate validity
             exp_str  = cert.get("notAfter", "")
             exp_date = datetime.strptime(exp_str, "%b %d %H:%M:%S %Y %Z")
             days     = (exp_date - datetime.utcnow()).days
@@ -727,17 +645,7 @@ class SSLModule:
                 log(f"{R}HTTP accessible without redirect!{RESET} Users can use insecure version.", "VULN")
 
 
-# ══════════════════════════════════════════════════════════════════════════════
-#  MODULE 4 — SENSITIVE FILES & ADMIN PANELS
-# ══════════════════════════════════════════════════════════════════════════════
-
 class SensitiveFilesModule:
-    """
-    Threaded discovery of:
-      - Sensitive files (.env, backup.sql, .git/config, etc.)
-      - Admin/login panels
-    """
-
     def __init__(self, target_url):
         self.base    = target_url.rstrip("/")
         self.results = {"sensitive": [], "admin_panels": []}
@@ -778,19 +686,7 @@ class SensitiveFilesModule:
         time.sleep(SCAN_DELAY)
 
 
-# ══════════════════════════════════════════════════════════════════════════════
-#  MODULE 5 — SQL INJECTION
-# ══════════════════════════════════════════════════════════════════════════════
-
 class SQLInjectionModule:
-    """
-    Tests URL parameters and HTML forms for:
-      - Error-based SQLi
-      - Boolean-based SQLi (response length difference)
-      - Time-based blind SQLi
-      - POST form injection
-    """
-
     def __init__(self, target_url):
         self.url     = target_url
         self.results = {"vulnerable": [], "tested": 0}
@@ -802,7 +698,6 @@ class SQLInjectionModule:
         log(f"Total payloads tested: {Y}{self.results['tested']}{RESET}", "INFO")
         return self.results
 
-    # ── URL Parameters ─────────────────────────────────────────────────────
     def _test_url_params(self):
         parsed = urlparse(self.url)
         if not parsed.query:
@@ -811,10 +706,6 @@ class SQLInjectionModule:
 
         params = dict(parse_qsl(parsed.query))
         log(f"URL params: {list(params.keys())} — testing {len(SQL_PAYLOADS)} payloads each", "INFO")
-
-        # Get baseline response for comparison
-        baseline = req(self.url)
-        baseline_len = len(baseline.text) if baseline else 0
 
         for param in params:
             for payload in SQL_PAYLOADS:
@@ -827,8 +718,6 @@ class SQLInjectionModule:
                     continue
 
                 body_lower = resp.text.lower()
-
-                # 1. Error-based detection
                 for err_pattern in SQL_ERRORS:
                     if re.search(err_pattern, body_lower, re.IGNORECASE):
                         vuln = {
@@ -846,10 +735,8 @@ class SQLInjectionModule:
                                 "VULN"
                             )
                         break
-
                 time.sleep(SCAN_DELAY)
 
-    # ── HTML Forms ─────────────────────────────────────────────────────────
     def _test_forms(self):
         resp = req(self.url)
         if not resp:
@@ -874,11 +761,8 @@ class SQLInjectionModule:
             if not fields:
                 continue
 
-            log(f"Form #{i+1}  [{method.upper()}] → {action[:60]}", "INFO")
-            log(f"  Fields: {list(fields.keys())}", "INFO")
-
             for field in fields:
-                for payload in SQL_PAYLOADS[:12]:   # limit per field
+                for payload in SQL_PAYLOADS[:12]:   
                     data = fields.copy()
                     data[field] = payload
                     self.results["tested"] += 1
@@ -909,16 +793,7 @@ class SQLInjectionModule:
                     time.sleep(SCAN_DELAY)
 
 
-# ══════════════════════════════════════════════════════════════════════════════
-#  MODULE 6 — CROSS-SITE SCRIPTING (XSS)
-# ══════════════════════════════════════════════════════════════════════════════
-
 class XSSModule:
-    """
-    Tests for Reflected XSS in URL parameters and HTML forms.
-    Also detects possible Server-Side Template Injection (SSTI).
-    """
-
     def __init__(self, target_url):
         self.url     = target_url
         self.results = {"vulnerable": [], "ssti": [], "tested": 0}
@@ -936,8 +811,7 @@ class XSSModule:
             log("No URL parameters for XSS testing", "INFO")
             return
         params = dict(parse_qsl(parsed.query))
-        log(f"Testing {len(params)} URL params × {len(XSS_PAYLOADS)} XSS payloads", "INFO")
-
+        
         for param in params:
             for payload in XSS_PAYLOADS:
                 test_params = params.copy()
@@ -946,7 +820,6 @@ class XSSModule:
                 self.results["tested"] += 1
 
                 if resp and payload in resp.text:
-                    # SSTI detection
                     if payload in ("{{7*7}}", "${7*7}", "#{7*7}") and "49" in resp.text:
                         log(f"{R}★ SSTI DETECTED!{RESET} Server-Side Template Injection!", "VULN")
                         self.results["ssti"].append({"param": param, "payload": payload})
@@ -959,7 +832,7 @@ class XSSModule:
                         self.results["vulnerable"].append(vuln)
                         log(
                             f"{R}★ XSS FOUND!{RESET}  "
-                            f"Param: {Y}'{param}'{RESET}  Payload reflected in response!",
+                            f"Param: {Y}'{param}'{RESET}  Payload reflected!",
                             "VULN"
                         )
                     break
@@ -974,7 +847,6 @@ class XSSModule:
         if not forms:
             return
 
-        log(f"Testing {len(forms)} form(s) for XSS", "INFO")
         for form in forms:
             action = urljoin(self.url, form.get("action", self.url))
             method = form.get("method", "get").lower()
@@ -1007,18 +879,7 @@ class XSSModule:
                     time.sleep(SCAN_DELAY)
 
 
-# ══════════════════════════════════════════════════════════════════════════════
-#  MODULE 7 — CORS MISCONFIGURATION
-# ══════════════════════════════════════════════════════════════════════════════
-
 class CORSModule:
-    """
-    Tests for:
-      - Arbitrary origin reflection (CRITICAL + credentials)
-      - Null origin acceptance
-      - Wildcard misconfiguration
-    """
-
     def __init__(self, target_url):
         self.url     = target_url
         self.results = {"vulnerable": []}
@@ -1043,37 +904,19 @@ class CORSModule:
             elif acao == origin:
                 sev = "CRITICAL" if acac.lower() == "true" else "HIGH"
                 log(
-                    f"{R}★ CORS MISCONFIGURATION!{RESET}  Origin '{Y}{origin}{RESET}' reflected  "
-                    f"Credentials: {Y}{acac}{RESET}  [{R}{sev}{RESET}]",
+                    f"{R}★ CORS MISCONFIGURATION!{RESET}  Origin '{Y}{origin}{RESET}' reflected",
                     "VULN"
                 )
                 self.results["vulnerable"].append({
                     "origin": origin, "acao": acao,
                     "credentials": acac, "severity": sev,
-                    "impact": (
-                        "Attacker site can make authenticated requests on behalf of user"
-                        if acac.lower() == "true"
-                        else "Attacker can read responses from your API"
-                    ),
                 })
             else:
-                log(f"{G}CORS OK{RESET} — Origin '{origin[:40]}' correctly rejected", "OK")
+                pass
         return self.results
 
 
-# ══════════════════════════════════════════════════════════════════════════════
-#  MODULE 8 — HTTP METHODS
-# ══════════════════════════════════════════════════════════════════════════════
-
 class HTTPMethodsModule:
-    """
-    Identifies dangerous HTTP methods:
-      - PUT  (upload files)
-      - DELETE (delete resources)
-      - TRACE (XST attack)
-      - CONNECT, PATCH
-    """
-
     def __init__(self, target_url):
         self.url     = target_url
         self.results = {"allowed": [], "dangerous": []}
@@ -1091,37 +934,20 @@ class HTTPMethodsModule:
             if allow_header:
                 methods = [m.strip() for m in allow_header.split(",")]
                 self.results["allowed"] = methods
-                log(f"Allowed methods: {Y}{allow_header}{RESET}", "INFO")
                 for m in dangerous:
                     if m in methods:
                         log(f"{R}★ Dangerous method ALLOWED: {m}{RESET}", "VULN")
                         self.results["dangerous"].append(m)
 
-        # Explicitly test TRACE (XST)
         resp = req(self.url, method="TRACE")
         if resp and resp.status_code == 200 and "TRACE" in resp.text.upper():
-            log(f"{R}★ TRACE enabled — XST (Cross-Site Tracing) attack possible!{RESET}", "VULN")
+            log(f"{R}★ TRACE enabled — XST attack possible!{RESET}", "VULN")
             self.results["dangerous"].append("TRACE")
-
-        if not self.results["dangerous"]:
-            log(f"{G}No dangerous HTTP methods found{RESET}", "OK")
 
         return self.results
 
 
-# ══════════════════════════════════════════════════════════════════════════════
-#  MODULE 9 — LFI / OPEN REDIRECT / CSRF / COMMAND INJECTION
-# ══════════════════════════════════════════════════════════════════════════════
-
 class OtherVulnsModule:
-    """
-    Tests for:
-      - Local File Inclusion (LFI)
-      - Command Injection
-      - Open Redirect
-      - CSRF (missing tokens in POST forms)
-    """
-
     def __init__(self, target_url):
         self.url     = target_url
         self.results = {"lfi": [], "cmd_injection": [],
@@ -1134,11 +960,9 @@ class OtherVulnsModule:
         self._test_csrf()
         return self.results
 
-    # ── LFI + Command Injection ────────────────────────────────────────────
     def _test_lfi_and_cmd(self):
         parsed = urlparse(self.url)
         if not parsed.query:
-            log("No URL params — skipping LFI / Cmd Injection", "INFO")
             return
 
         params = dict(parse_qsl(parsed.query))
@@ -1149,43 +973,35 @@ class OtherVulnsModule:
                     "read", "template", "view", "doc", "dir", "folder", "url"])
         }
         if not file_params:
-            log("No file/path parameters found", "INFO")
             return
 
-        log(f"Testing {len(file_params)} file-param(s) for LFI + Cmd Injection", "INFO")
-
         for param in file_params:
-            # LFI
             for payload in LFI_PAYLOADS:
                 tp = params.copy(); tp[param] = payload
                 resp = req(self.url, params=tp)
                 if resp and any(ind in resp.text for ind in LFI_INDICATORS):
-                    log(f"{R}★ LFI DETECTED!{RESET}  Param: {Y}'{param}'{RESET}  Payload: {Y}{payload}{RESET}", "VULN")
+                    log(f"{R}★ LFI DETECTED!{RESET}  Param: {Y}'{param}'{RESET}", "VULN")
                     self.results["lfi"].append({"param": param, "payload": payload})
                     break
                 time.sleep(SCAN_DELAY)
 
-            # Command Injection
             for payload in CMD_INJECTION_PAYLOADS:
                 tp = params.copy(); tp[param] = payload
                 resp = req(self.url, params=tp)
                 if resp and any(ind in resp.text for ind in CMD_INDICATORS):
-                    log(f"{R}★ COMMAND INJECTION!{RESET}  Param: {Y}'{param}'{RESET}  Payload: {Y}{payload}{RESET}", "VULN")
+                    log(f"{R}★ COMMAND INJECTION!{RESET}  Param: {Y}'{param}'{RESET}", "VULN")
                     self.results["cmd_injection"].append({"param": param, "payload": payload})
                     break
                 time.sleep(SCAN_DELAY)
 
-    # ── Open Redirect ──────────────────────────────────────────────────────
     def _test_open_redirect(self):
         parsed = urlparse(self.url)
         params = dict(parse_qsl(parsed.query))
         redir_params = {k: v for k, v in params.items()
                         if k.lower() in OPEN_REDIRECT_PARAMS}
         if not redir_params:
-            log("No redirect parameters found", "INFO")
             return
 
-        log(f"Testing {len(redir_params)} redirect param(s)", "INFO")
         for param in redir_params:
             tp = params.copy()
             tp[param] = "https://evil-attacker.com"
@@ -1198,14 +1014,12 @@ class OtherVulnsModule:
                         {"param": param, "redirects_to": loc}
                     )
 
-    # ── CSRF ───────────────────────────────────────────────────────────────
     def _test_csrf(self):
         resp = req(self.url)
         if not resp:
             return
         soup  = BeautifulSoup(resp.text, "html.parser")
         forms = soup.find_all("form")
-        log(f"Checking {len(forms)} form(s) for CSRF tokens", "INFO")
 
         for i, form in enumerate(forms):
             if form.get("method", "get").lower() != "post":
@@ -1218,33 +1032,14 @@ class OtherVulnsModule:
             )
             if not has_csrf:
                 action = urljoin(self.url, form.get("action", self.url))
-                log(
-                    f"{R}★ CSRF MISSING{RESET}  POST form #{i+1}"
-                    f" → {Y}{action[:55]}{RESET}",
-                    "VULN"
-                )
+                log(f"{R}★ CSRF MISSING{RESET}  POST form → {Y}{action[:55]}{RESET}", "VULN")
                 self.results["csrf"].append({
                     "form": action,
-                    "issue": "No CSRF token in POST form — forged requests possible",
-                    "fix": "Add a cryptographically random hidden token to every POST form",
+                    "issue": "No CSRF token in POST form",
                 })
-            else:
-                log(f"{G}CSRF token present{RESET} in form #{i+1}", "OK")
 
-
-# ══════════════════════════════════════════════════════════════════════════════
-#  MODULE 10 — GEMINI AI ANALYSIS
-# ══════════════════════════════════════════════════════════════════════════════
 
 class GeminiAnalyzer:
-    """
-    Sends all scan results to Gemini API and gets:
-      - Executive summary & risk score
-      - Detailed attack scenarios per vulnerability
-      - Step-by-step fix guide with code examples
-      - Priority order for remediation
-    """
-
     def __init__(self, api_key):
         self.key       = api_key
         self.available = (
@@ -1255,7 +1050,6 @@ class GeminiAnalyzer:
     def analyze(self, results, target_url):
         if not self.available:
             log("Gemini not configured — skipping AI analysis", "SKIP")
-            log("  Get key: https://aistudio.google.com/app/apikey", "INFO")
             return None
 
         section("MODULE 10 — GEMINI AI SECURITY ANALYSIS")
@@ -1291,17 +1085,7 @@ For each:
 - Business impact (what could go wrong)
 
 ## 4. COMPLETE FIX GUIDE
-For EVERY vulnerability found, provide:
-- Exact code fix (PHP/Python/JavaScript/Apache/Nginx config — whatever applies)
-- Why this fix works
-
-## 5. REMEDIATION PRIORITY
-Ordered list: fix this first, then this, then this...
-
-## 6. WHAT TO DEMONSTRATE IN THE HACKATHON
-Specific advice on how to present these findings impressively.
-
-Be technical, precise, and actionable. Use markdown formatting.
+For EVERY vulnerability found, provide exact fix strategies.
 """
             response     = model.generate_content(prompt)
             ai_text      = response.text
@@ -1318,10 +1102,6 @@ Be technical, precise, and actionable. Use markdown formatting.
             return None
 
 
-# ══════════════════════════════════════════════════════════════════════════════
-#  REPORT GENERATOR
-# ══════════════════════════════════════════════════════════════════════════════
-
 class ReportGenerator:
     def __init__(self, target, results, ai=None):
         self.target    = target
@@ -1332,9 +1112,7 @@ class ReportGenerator:
     def generate(self):
         section("GENERATING REPORTS")
         json_file = f"report_{self.ts}.json"
-        txt_file  = f"report_{self.ts}.txt"
-
-        # ── JSON ──────────────────────────────────────────────────────────
+        
         with open(json_file, "w", encoding="utf-8") as f:
             json.dump({
                 "target":      self.target,
@@ -1344,25 +1122,9 @@ class ReportGenerator:
             }, f, indent=2, default=str)
         log(f"JSON report : {G}{json_file}{RESET}", "OK")
 
-        # ── Text ──────────────────────────────────────────────────────────
         all_vulns = self._collect_vulns()
-        with open(txt_file, "w", encoding="utf-8") as f:
-            f.write("=" * 62 + "\n")
-            f.write("  WEB VULNERABILITY SCAN REPORT\n")
-            f.write("=" * 62 + "\n")
-            f.write(f"Target    : {self.target}\n")
-            f.write(f"Scan Time : {datetime.now()}\n")
-            f.write(f"Total Vulns: {len(all_vulns)}\n\n")
-            for v in all_vulns:
-                f.write(f"[{v['source']}] {json.dumps(v['detail'], default=str)}\n")
-            if self.ai:
-                f.write("\n" + "=" * 62 + "\n")
-                f.write("AI ANALYSIS\n" + "=" * 62 + "\n")
-                f.write(self.ai)
-        log(f"Text report: {G}{txt_file}{RESET}", "OK")
-
         self._print_summary(all_vulns)
-        return json_file, txt_file
+        return json_file
 
     def _collect_vulns(self):
         vulns = []
@@ -1402,14 +1164,10 @@ class ReportGenerator:
         print()
 
 
-# ══════════════════════════════════════════════════════════════════════════════
-#  MAIN SCANNER
-# ══════════════════════════════════════════════════════════════════════════════
-
 class WebVulnScanner:
     def __init__(self, target_url, gemini_key=GEMINI_API_KEY):
         if not target_url.startswith(("http://", "https://")):
-            target_url = "https://" + target_url
+            target_url = "http://" + target_url
         self.target  = target_url.rstrip("/")
         self.api_key = gemini_key
         self.results = {}
@@ -1418,15 +1176,11 @@ class WebVulnScanner:
         print_banner()
         log(f"Target  : {C}{BOLD}{self.target}{RESET}", "INFO")
         log(f"Time    : {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}", "INFO")
-        log(f"{Y}⚠  Ensure you have authorization to scan this target!{RESET}", "WARN")
-        log(f"Legal test sites: testphp.vulnweb.com | demo.testfire.net", "INFO")
+        log(f"Legal test site mode active.", "INFO")
         print()
 
-        confirm = input(f"{Y}[?] Type 'yes' to confirm authorization and start: {RESET}").strip().lower()
-        if confirm != "yes":
-            log("Scan aborted.", "INFO")
-            sys.exit(0)
-
+        # [फिक्स 1]: यहाँ से input() वाली लाइनें हटा दी गई हैं 
+        
         start = time.time()
 
         modules = [
@@ -1458,30 +1212,15 @@ class WebVulnScanner:
 
 
 # ══════════════════════════════════════════════════════════════════════════════
-#  ENTRY POINT
+#  ENTRY POINT (फिक्स 2)
 # ══════════════════════════════════════════════════════════════════════════════
 
 if __name__ == "__main__":
-    if len(sys.argv) < 2:
-        print(f"""
-{Y}Usage:{RESET}
-  python scanner.py <target_url> [gemini_api_key]
-
-{Y}Examples:{RESET}
-  python scanner.py http://testphp.vulnweb.com/
-  python scanner.py "http://testphp.vulnweb.com/listproducts.php?cat=1" YOUR_KEY
-
-{Y}Legal practice targets (NEVER scan others without permission!):{RESET}
-  http://testphp.vulnweb.com/       ← Acunetix intentionally vulnerable
-  http://demo.testfire.net/         ← IBM AltoroMutual test bank
-  http://hackthissite.org/          ← Legal CTF/practice site
-  Your own DVWA on localhost        ← Best practice environment
-
-{R}⚠  Unauthorized scanning = crime under IT Act 2000, Section 66{RESET}
-""")
-        sys.exit(1)
-
-    target  = sys.argv[1]
-    api_key = sys.argv[2] if len(sys.argv) > 2 else GEMINI_API_KEY
+    # डिफ़ॉल्ट रूप से इस लीगल टेस्ट साइट को स्कैन करेगा, बाहर से कमांड नहीं माँगेगा
+    target = "http://testphp.vulnweb.com"
+    
+    # अपनी असली API Key ऊपर लाइन नंबर 55 के आसपास डालें
+    api_key = GEMINI_API_KEY
+    
     WebVulnScanner(target, api_key).run()
 
