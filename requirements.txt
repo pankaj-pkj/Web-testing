@@ -1,0 +1,19 @@
+# Web Vulnerability Scanner — Python Dependencies
+# Install: pip install -r requirements.txt
+
+# Core (required)
+requests>=2.31.0
+beautifulsoup4>=4.12.0
+colorama>=0.4.6
+lxml>=5.0.0
+
+# Optional but recommended
+dnspython>=2.4.0         # DNS record lookups (Module 1)
+python-whois>=0.8.0      # WHOIS domain info  (Module 1)
+
+# AI Analysis (optional — set GEMINI_API_KEY in scanner.py)
+google-generativeai>=0.4.0
+
+# Dev tools (optional)
+ipython>=8.0.0
+
