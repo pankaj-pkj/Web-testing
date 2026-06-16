@@ -1,7 +1,12 @@
-flask>=3.0.0
+# PHANTOM v2.0 — Dependencies
+# pip install -r requirements.txt
+
+# Core (required)
+rich>=13.7.0
 requests>=2.31.0
 beautifulsoup4>=4.12.0
 lxml>=5.0.0
-dnspython>=2.4.0
-python-whois>=0.8.0
-gunicorn>=21.0.0
+
+# Optional but recommended
+dnspython>=2.4.0        # DNS recon, zone transfer
+python-whois>=0.8.0     # WHOIS lookup
