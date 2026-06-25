@@ -4014,7 +4014,7 @@ input[type=text]:focus{border-color:var(--cy)}
     <p>PHANTOM v5.0 runs autonomous phases: OSINT + Subdomain Enum → Async Port Scan → Deep Spider + Headless DOM → 58 Modules incl. Out-of-Band engine, RL adaptive mutation, stateful business-logic & API fuzzing, with CVSS v3.1 scoring and an attack-chain engine.</p>
     <div style="margin-bottom:10px">
       <label>Target URL</label>
-      <input type="text" id="iu" value="http://testphp.vulnweb.com/" placeholder="https://your-authorized-target.com">
+      <input type="text" id="iu" value="http://demo.testfire.net/" placeholder="https://your-authorized-target.com">
     </div>
     <button type="button" class="btn" id="sb" onclick="go()">⚡ LAUNCH PHANTOM v5.0</button>
     <div id="err-box" style="display:none;margin-top:10px;background:#f8514918;border:1px solid #f8514960;
