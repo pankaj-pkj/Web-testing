@@ -1,4 +1,4 @@
-# PHANTOM v4.0 — Dependencies
+# PHANTOM v5.0 — Dependencies
 flask>=3.0.0
 requests>=2.31.0
 beautifulsoup4>=4.12.0
@@ -6,3 +6,8 @@ lxml>=5.0.0
 dnspython>=2.4.0
 python-whois>=0.8.0
 gunicorn>=21.0.0
+
+# Optional — enables the Headless Browser (Dynamic DOM) engine.
+# The scanner runs fine without it (it degrades gracefully).
+# To enable locally:  pip install playwright && playwright install chromium
+# playwright>=1.40.0
